@@ -1,0 +1,497 @@
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+use domain::OutputId;
+
+use super::wire::{Event, Window, Workspace};
+use crate::event::CompositorEvent;
+
+/// Everything the backend must remember to answer "which monitor has the focus".
+///
+/// The compositor reports focus as a window id and scroll position as a workspace index.
+/// Joining those to an output is this file's entire job.
+#[derive(Debug, Default)]
+pub struct Tracker {
+    workspaces: HashMap<u64, WorkspaceSlot>,
+    /// Window id to the workspace it sits on.
+    window_workspace: HashMap<u64, u64>,
+    /// Window id to its one-based column in the scrolling layout.
+    window_column: HashMap<u64, u32>,
+    /// Where the focus last sat in each workspace's scrolling layout.
+    ///
+    /// Per workspace rather than read from the focus when reporting, because focus is
+    /// global: an output that does not hold it has a scroll position all the same.
+    workspace_column: HashMap<u64, u32>,
+    focused_window: Option<u64>,
+    overview: bool,
+}
+
+#[derive(Debug)]
+struct WorkspaceSlot {
+    output: Option<OutputId>,
+    idx: u32,
+    active: bool,
+}
+
+impl Tracker {
+    /// Folds one compositor event into the tracked state.
+    pub fn apply(&mut self, event: Event) {
+        match event {
+            Event::WorkspacesChanged { workspaces } => self.replace_workspaces(workspaces),
+            Event::WorkspaceActivated { id } => self.activate(id),
+            Event::WindowsChanged { windows } => self.replace_windows(windows),
+            Event::WindowOpenedOrChanged { window } => {
+                if window.is_focused {
+                    self.focused_window = Some(window.id);
+                }
+                self.add_window(window);
+            }
+            Event::WindowClosed { id } => {
+                self.window_workspace.remove(&id);
+                self.window_column.remove(&id);
+                if self.focused_window == Some(id) {
+                    self.focused_window = None;
+                }
+            }
+            Event::WindowFocusChanged { id } => self.focused_window = id,
+            Event::WindowLayoutsChanged { changes } => {
+                for (id, layout) in changes {
+                    match layout.pos_in_scrolling_layout {
+                        Some((column, _row)) => self.window_column.insert(id, column),
+                        None => self.window_column.remove(&id),
+                    };
+                }
+            }
+            Event::OverviewOpenedOrClosed { is_open } => self.overview = is_open,
+        }
+        self.remember_focused_column();
+    }
+
+    /// Records where the focus sits in its own workspace's scrolling layout.
+    ///
+    /// A focused window with no column, such as a floating or fullscreen one, leaves the
+    /// last value standing: the workspace has not scrolled just because something is
+    /// drawn over it.
+    fn remember_focused_column(&mut self) {
+        let Some(window) = self.focused_window else { return };
+        let (Some(&workspace), Some(&column)) =
+            (self.window_workspace.get(&window), self.window_column.get(&window))
+        else {
+            return;
+        };
+        self.workspace_column.insert(workspace, column);
+    }
+
+    /// Restates the whole world as normalized facts.
+    ///
+    /// Everything is emitted after every event rather than diffed here, because the
+    /// receiving end already ignores facts that did not change. A diff would be a
+    /// second, subtler copy of that same bookkeeping.
+    pub fn facts(&self) -> Vec<CompositorEvent> {
+        let mut events = vec![CompositorEvent::OutputsChanged { outputs: self.outputs() }];
+
+        for (output, workspaces) in self.workspaces_by_output() {
+            let count = workspaces.len() as u32;
+            let idx = workspaces
+                .iter()
+                .find(|slot| slot.active)
+                .map_or(0, |slot| slot.idx.min(count.max(1)));
+            events.push(CompositorEvent::WorkspaceActive { output: output.clone(), idx, count });
+
+            let (column, columns) = self.columns_on(&output);
+            events.push(CompositorEvent::ColumnActive { output, idx: column, count: columns });
+        }
+
+        events.push(CompositorEvent::FocusMoved { output: self.focused_output() });
+        events.push(CompositorEvent::OverviewToggled { active: self.overview });
+        events
+    }
+
+    /// The monitor holding the focused window. Focus is global, so at most one.
+    fn focused_output(&self) -> Option<OutputId> {
+        let window = self.focused_window?;
+        let workspace = self.window_workspace.get(&window)?;
+        self.workspaces.get(workspace)?.output.clone()
+    }
+
+    /// Where this output's active workspace sits in its own scrolling layout, and how far
+    /// it can travel. `(0, _)` means nothing has been focused there yet.
+    fn columns_on(&self, output: &OutputId) -> (u32, u32) {
+        let Some(workspace) = self.active_workspace(output) else { return (0, 0) };
+        let mut columns = BTreeSet::new();
+        for (window, id) in &self.window_workspace {
+            if *id == workspace
+                && let Some(column) = self.window_column.get(window)
+            {
+                columns.insert(*column);
+            }
+        }
+        if columns.is_empty() {
+            return (0, 0);
+        }
+        let count = columns.len() as u32;
+        let Some(&remembered) = self.workspace_column.get(&workspace) else { return (0, count) };
+
+        // Rank rather than raw column index, so a layout with gaps still maps onto the
+        // full travel. A remembered column that has closed takes the next one along.
+        let rank = columns.iter().take_while(|&&column| column < remembered).count();
+        (rank.min(columns.len() - 1) as u32 + 1, count)
+    }
+
+    fn active_workspace(&self, output: &OutputId) -> Option<u64> {
+        self.workspaces
+            .iter()
+            .find(|(_, slot)| slot.active && slot.output.as_ref() == Some(output))
+            .map(|(id, _)| *id)
+    }
+
+    fn outputs(&self) -> Vec<OutputId> {
+        let mut outputs: Vec<OutputId> =
+            self.workspaces.values().filter_map(|slot| slot.output.clone()).collect();
+        outputs.sort();
+        outputs.dedup();
+        outputs
+    }
+
+    /// Grouped and ordered, so the reported index matches the order the compositor lays
+    /// the workspaces out in.
+    fn workspaces_by_output(&self) -> BTreeMap<OutputId, Vec<&WorkspaceSlot>> {
+        let mut grouped: BTreeMap<OutputId, Vec<&WorkspaceSlot>> = BTreeMap::new();
+        for slot in self.workspaces.values() {
+            if let Some(output) = &slot.output {
+                grouped.entry(output.clone()).or_default().push(slot);
+            }
+        }
+        for slots in grouped.values_mut() {
+            slots.sort_by_key(|slot| slot.idx);
+        }
+        grouped
+    }
+
+    fn replace_workspaces(&mut self, workspaces: Vec<Workspace>) {
+        self.workspaces = workspaces
+            .into_iter()
+            .map(|workspace| {
+                let slot = WorkspaceSlot {
+                    output: workspace.output.map(OutputId::new),
+                    idx: workspace.idx,
+                    active: workspace.is_active,
+                };
+                (workspace.id, slot)
+            })
+            .collect();
+        // So the remembered positions do not accumulate across a long session.
+        let live = &self.workspaces;
+        self.workspace_column.retain(|workspace, _| live.contains_key(workspace));
+    }
+
+    fn replace_windows(&mut self, windows: Vec<Window>) {
+        self.window_workspace.clear();
+        self.window_column.clear();
+        for window in windows {
+            if window.is_focused {
+                self.focused_window = Some(window.id);
+            }
+            self.add_window(window);
+        }
+    }
+
+    fn add_window(&mut self, window: Window) {
+        match window.workspace_id {
+            Some(workspace) => {
+                self.window_workspace.insert(window.id, workspace);
+            }
+            None => {
+                self.window_workspace.remove(&window.id);
+            }
+        }
+        match window.layout.pos_in_scrolling_layout {
+            Some((column, _row)) => self.window_column.insert(window.id, column),
+            None => self.window_column.remove(&window.id),
+        };
+    }
+
+    /// Activates one workspace and deactivates the others sharing its output.
+    fn activate(&mut self, id: u64) {
+        let Some(output) = self.workspaces.get(&id).and_then(|slot| slot.output.clone()) else {
+            return;
+        };
+        for (workspace, slot) in &mut self.workspaces {
+            if slot.output.as_ref() == Some(&output) {
+                slot.active = *workspace == id;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backends::niri::wire;
+
+    fn feed(tracker: &mut Tracker, line: &str) {
+        let event = wire::parse(line).expect("valid JSON").expect("a modelled event");
+        tracker.apply(event);
+    }
+
+    /// The layout actually running on the machine this was written on.
+    fn populated() -> Tracker {
+        let mut tracker = Tracker::default();
+        feed(
+            &mut tracker,
+            r#"{"WorkspacesChanged":{"workspaces":[
+                {"id":1,"idx":1,"output":"DP-1","is_active":true},
+                {"id":3,"idx":2,"output":"DP-1","is_active":false},
+                {"id":5,"idx":3,"output":"DP-1","is_active":false},
+                {"id":2,"idx":1,"output":"eDP-1","is_active":true},
+                {"id":6,"idx":2,"output":"eDP-1","is_active":false}]}}"#,
+        );
+        feed(
+            &mut tracker,
+            r#"{"WindowsChanged":{"windows":[
+                {"id":4,"workspace_id":1,"is_focused":true,
+                 "layout":{"pos_in_scrolling_layout":[1,1]}},
+                {"id":3,"workspace_id":2,"is_focused":false,
+                 "layout":{"pos_in_scrolling_layout":[1,1]}}]}}"#,
+        );
+        tracker
+    }
+
+    fn workspace_of(facts: &[CompositorEvent], want: &str) -> (u32, u32) {
+        facts
+            .iter()
+            .find_map(|event| match event {
+                CompositorEvent::WorkspaceActive { output, idx, count }
+                    if output.as_str() == want =>
+                {
+                    Some((*idx, *count))
+                }
+                _ => None,
+            })
+            .expect("the output should be reported")
+    }
+
+    fn columns_of(facts: &[CompositorEvent], want: &str) -> (u32, u32) {
+        facts
+            .iter()
+            .find_map(|event| match event {
+                CompositorEvent::ColumnActive { output, idx, count } if output.as_str() == want => {
+                    Some((*idx, *count))
+                }
+                _ => None,
+            })
+            .expect("columns should be reported")
+    }
+
+    fn focus_of(facts: &[CompositorEvent]) -> Option<OutputId> {
+        facts.iter().find_map(|event| match event {
+            CompositorEvent::FocusMoved { output } => Some(output.clone()),
+            _ => None,
+        })?
+    }
+
+    #[test]
+    fn each_output_reports_its_own_workspace_position() {
+        let facts = populated().facts();
+        assert_eq!(workspace_of(&facts, "DP-1"), (1, 3));
+        assert_eq!(workspace_of(&facts, "eDP-1"), (1, 2));
+    }
+
+    #[test]
+    fn activating_a_workspace_moves_only_its_own_output() {
+        let mut tracker = populated();
+        feed(&mut tracker, r#"{"WorkspaceActivated":{"id":5,"focused":true}}"#);
+
+        let facts = tracker.facts();
+        assert_eq!(workspace_of(&facts, "DP-1"), (3, 3), "DP-1 should have moved");
+        assert_eq!(workspace_of(&facts, "eDP-1"), (1, 2), "eDP-1 should be untouched");
+    }
+
+    #[test]
+    fn activating_deactivates_the_previous_workspace_on_that_output() {
+        let mut tracker = populated();
+        feed(&mut tracker, r#"{"WorkspaceActivated":{"id":3,"focused":true}}"#);
+        feed(&mut tracker, r#"{"WorkspaceActivated":{"id":5,"focused":true}}"#);
+        assert_eq!(workspace_of(&tracker.facts(), "DP-1"), (3, 3));
+    }
+
+    #[test]
+    fn focus_resolves_through_the_window_to_its_output() {
+        assert_eq!(focus_of(&populated().facts()), Some(OutputId::new("DP-1")));
+    }
+
+    #[test]
+    fn focusing_a_window_on_the_other_monitor_moves_the_focus() {
+        let mut tracker = populated();
+        feed(&mut tracker, r#"{"WindowFocusChanged":{"id":3}}"#);
+        assert_eq!(focus_of(&tracker.facts()), Some(OutputId::new("eDP-1")));
+    }
+
+    #[test]
+    fn losing_focus_leaves_no_output_focused() {
+        let mut tracker = populated();
+        feed(&mut tracker, r#"{"WindowFocusChanged":{"id":null}}"#);
+        assert_eq!(focus_of(&tracker.facts()), None);
+    }
+
+    #[test]
+    fn closing_the_focused_window_clears_the_focus() {
+        let mut tracker = populated();
+        feed(&mut tracker, r#"{"WindowClosed":{"id":4}}"#);
+        assert_eq!(focus_of(&tracker.facts()), None);
+    }
+
+    #[test]
+    fn a_focused_window_on_no_workspace_focuses_no_output() {
+        let mut tracker = populated();
+        feed(
+            &mut tracker,
+            r#"{"WindowOpenedOrChanged":{"window":
+                {"id":99,"workspace_id":null,"is_focused":true,"layout":{}}}}"#,
+        );
+        assert_eq!(focus_of(&tracker.facts()), None);
+    }
+
+    #[test]
+    fn the_overview_is_reported_globally() {
+        let mut tracker = populated();
+        feed(&mut tracker, r#"{"OverviewOpenedOrClosed":{"is_open":true}}"#);
+        assert!(
+            tracker
+                .facts()
+                .iter()
+                .any(|event| matches!(event, CompositorEvent::OverviewToggled { active: true }))
+        );
+    }
+
+    #[test]
+    fn outputs_are_taken_from_the_workspace_list() {
+        let facts = populated().facts();
+        let outputs = facts
+            .iter()
+            .find_map(|event| match event {
+                CompositorEvent::OutputsChanged { outputs } => Some(outputs.clone()),
+                _ => None,
+            })
+            .expect("outputs should be reported");
+        assert_eq!(outputs, vec![OutputId::new("DP-1"), OutputId::new("eDP-1")]);
+    }
+
+    /// Three columns on DP-1's active workspace, at 1, 5 and 9, with the first focused.
+    fn columns_with_gaps(tracker: &mut Tracker) {
+        feed(
+            tracker,
+            r#"{"WindowsChanged":{"windows":[
+                {"id":4,"workspace_id":1,"is_focused":true,
+                 "layout":{"pos_in_scrolling_layout":[1,1]}},
+                {"id":8,"workspace_id":1,"is_focused":false,
+                 "layout":{"pos_in_scrolling_layout":[5,1]}},
+                {"id":9,"workspace_id":1,"is_focused":false,
+                 "layout":{"pos_in_scrolling_layout":[9,1]}}]}}"#,
+        );
+    }
+
+    #[test]
+    fn columns_are_ranked_within_the_active_workspace() {
+        let mut tracker = populated();
+        columns_with_gaps(&mut tracker);
+        assert_eq!(columns_of(&tracker.facts(), "DP-1"), (1, 3), "gaps must not inflate it");
+
+        feed(&mut tracker, r#"{"WindowFocusChanged":{"id":9}}"#);
+        assert_eq!(columns_of(&tracker.facts(), "DP-1"), (3, 3));
+    }
+
+    #[test]
+    fn an_output_without_the_focus_still_reports_its_own_column() {
+        let mut tracker = populated();
+        columns_with_gaps(&mut tracker);
+        feed(&mut tracker, r#"{"WindowFocusChanged":{"id":9}}"#);
+        assert_eq!(columns_of(&tracker.facts(), "DP-1"), (3, 3));
+
+        // Focus leaves for the other monitor. DP-1 has not scrolled, so it must not move.
+        feed(
+            &mut tracker,
+            r#"{"WindowOpenedOrChanged":{"window":
+                {"id":20,"workspace_id":2,"is_focused":true,
+                 "layout":{"pos_in_scrolling_layout":[1,1]}}}}"#,
+        );
+        assert_eq!(focus_of(&tracker.facts()), Some(OutputId::new("eDP-1")));
+        assert_eq!(
+            columns_of(&tracker.facts(), "DP-1"),
+            (3, 3),
+            "an unfocused output must keep its position rather than centring"
+        );
+        assert_eq!(columns_of(&tracker.facts(), "eDP-1"), (1, 1));
+    }
+
+    #[test]
+    fn focusing_a_window_with_no_column_holds_the_position() {
+        let mut tracker = populated();
+        columns_with_gaps(&mut tracker);
+        feed(&mut tracker, r#"{"WindowFocusChanged":{"id":8}}"#);
+        assert_eq!(columns_of(&tracker.facts(), "DP-1"), (2, 3));
+
+        // A floating window has no place in the scroll, so nothing has scrolled.
+        feed(
+            &mut tracker,
+            r#"{"WindowOpenedOrChanged":{"window":
+                {"id":50,"workspace_id":1,"is_focused":true,"layout":{}}}}"#,
+        );
+        assert_eq!(columns_of(&tracker.facts(), "DP-1"), (2, 3), "a float must not recentre");
+    }
+
+    #[test]
+    fn a_remembered_column_that_closed_falls_back_to_a_neighbour() {
+        let mut tracker = populated();
+        columns_with_gaps(&mut tracker);
+        feed(&mut tracker, r#"{"WindowFocusChanged":{"id":9}}"#);
+        assert_eq!(columns_of(&tracker.facts(), "DP-1"), (3, 3));
+
+        // The last column closes while the focus is elsewhere.
+        feed(
+            &mut tracker,
+            r#"{"WindowsChanged":{"windows":[
+                {"id":4,"workspace_id":1,"is_focused":false,
+                 "layout":{"pos_in_scrolling_layout":[1,1]}},
+                {"id":8,"workspace_id":1,"is_focused":false,
+                 "layout":{"pos_in_scrolling_layout":[5,1]}},
+                {"id":20,"workspace_id":2,"is_focused":true,
+                 "layout":{"pos_in_scrolling_layout":[1,1]}}]}}"#,
+        );
+        assert_eq!(
+            columns_of(&tracker.facts(), "DP-1"),
+            (2, 2),
+            "the nearest surviving column, not the centre"
+        );
+    }
+
+    #[test]
+    fn a_workspace_nothing_has_been_focused_on_reports_no_position() {
+        let mut tracker = Tracker::default();
+        feed(
+            &mut tracker,
+            r#"{"WorkspacesChanged":{"workspaces":[
+                {"id":1,"idx":1,"output":"DP-1","is_active":true}]}}"#,
+        );
+        feed(
+            &mut tracker,
+            r#"{"WindowsChanged":{"windows":[
+                {"id":8,"workspace_id":1,"is_focused":false,
+                 "layout":{"pos_in_scrolling_layout":[1,1]}},
+                {"id":9,"workspace_id":1,"is_focused":false,
+                 "layout":{"pos_in_scrolling_layout":[2,1]}}]}}"#,
+        );
+        assert_eq!(columns_of(&tracker.facts(), "DP-1"), (0, 2), "centred is the only answer");
+    }
+
+    #[test]
+    fn an_empty_workspace_has_no_columns() {
+        let mut tracker = populated();
+        feed(&mut tracker, r#"{"WindowsChanged":{"windows":[]}}"#);
+        let facts = tracker.facts();
+        assert!(
+            facts
+                .iter()
+                .any(|event| matches!(event, CompositorEvent::ColumnActive { count: 0, .. }))
+        );
+    }
+}

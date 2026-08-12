@@ -1,0 +1,56 @@
+[workspace]
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+compositor = { path = "crates/compositor" }
+config = { path = "crates/config" }
+control = { path = "crates/control" }
+domain = { path = "crates/domain" }
+render = { path = "crates/render" }
+
+anyhow = "1.0.104"
+calloop = { version = "0.14.4", features = ["signals"] }
+clap = { version = "4.6.6", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+toml = "1.1.4"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[package]
+name = "parra"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+compositor.workspace = true
+config.workspace = true
+control.workspace = true
+domain.workspace = true
+render.workspace = true
+
+anyhow.workspace = true
+calloop.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

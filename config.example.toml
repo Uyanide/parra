@@ -1,0 +1,80 @@
+# File: $XDG_CONFIG_HOME/parra/config.toml
+#
+# Every key below is optional and shown with its default.
+
+[general]
+# Layer-shell namespace, for compositor rules that match on it. Defaults to the
+# program's own name.
+#
+# This is useful for placing the wallpaper in the overview backdrop in niri with
+# a layer-rule. See docs/config.md.
+#namespace = "parra"
+
+# Which layer to sit on: "background" or "bottom".
+layer = "background"
+
+[wallpaper]
+# Absolute, or `~`-prefixed, or relative to this file's directory.
+# Leave unset to start blank and set one over the control socket
+# after the daemon is started.
+#path = "~/pictures/wall.png"
+
+# Vertical parallax, following the active workspace.
+[scroll.vertical]
+enabled = true
+
+# Fraction of the available travel to use, measured about the centre. 1 uses all of
+# it, 0 pins the image to the centre.
+travel = 1.0
+
+# 0 makes the move instant.
+duration-ms = 400
+
+# linear, out-quad, in-out-quad, out-cubic, in-out-cubic, out-quint
+easing = "out-cubic"
+
+# Horizontal parallax, following the column in the scrolling layout. Similar
+# as scroll.vertical, but disabled by default.
+[scroll.horizontal]
+enabled = false
+travel = 1.0
+duration-ms = 400
+easing = "out-cubic"
+
+[blur]
+# 0 disables blur entirely, skipping the bake.
+radius = 32
+
+# Linear downscale of the baked blur texture. Higher is cheaper and smaller.
+downscale = 4
+
+# #rgb, #rgba, #rrggbb, #rrggbbaa
+tint = "#1e1e2e"
+
+# Multiplied into the tint's own alpha.
+tint-opacity = 0.5
+
+duration-ms = 400
+easing = "in-out-cubic"
+
+[overview]
+# Fraction of the image visible when the overview is closed. The rest is the
+# headroom the parallax scrolls through, so 1.0 means no scrolling at all.
+crop-ratio = 0.9
+duration-ms = 400
+easing = "out-cubic"
+
+[transition]
+# "fade" parses and animates in the state model, but still swaps instantly on screen.
+mode = "none"
+duration-ms = 400
+easing = "in-out-cubic"
+
+# Per-output overrides, keyed by connector name as the compositor reports it.
+# Any key left out is inherited from the sections above.
+# [output."DP-1"]
+# blur.radius = 48
+# scroll.vertical.travel = 0.5
+#
+# [output."eDP-1"]
+# wallpaper.path = "~/pictures/other.png"
