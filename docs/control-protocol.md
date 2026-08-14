@@ -27,6 +27,21 @@ Variant names are kebab-case, so they read as commands. Field names are snake_ca
 Unknown fields are rejected rather than ignored: a typo fails loudly instead of being
 silently dropped.
 
+## Protocol version
+
+`ping` reports it and every snapshot carries it. It is bumped whenever the wire format
+changes, including when it only gains a field, so a client can tell a stale daemon from an
+unreachable one and can tell whether a field it wants exists at all.
+
+Rejecting unknown fields means a skew cannot pass unnoticed: a request from a newer client,
+or a reply to an older one, fails to parse rather than half working. The client turns that
+into a plain answer — on any refusal or unparseable reply it pings, compares, and reports
+`the daemon speaks protocol N, this build speaks M; restart the daemon` with exit code 4.
+Only a request that already failed pays for the extra round trip.
+
+This is the partial upgrade: a new binary talking to a daemon still running from before it
+was replaced. Restarting the daemon is the whole fix.
+
 ## Requests
 
 | Request                                                 | Meaning                                                                                                                      |
@@ -85,7 +100,7 @@ a temporary file and renames it over the original.
 | Response                      | Meaning                      |
 | ----------------------------- | ---------------------------- |
 | `"done"`                      | The request was carried out. |
-| `{"pong":{"version":4}}`      | Protocol version.            |
+| `{"pong":{"version":1}}`      | Protocol version.            |
 | `{"state":{...}}`             | A `StateSnapshot`.           |
 | `{"output":{...}}`            | One `OutputSnapshot`.        |
 | `{"error":{"message":"..."}}` | The request was refused.     |
@@ -94,7 +109,7 @@ a temporary file and renames it over the original.
 
 ```json
 {
-  "version": 4,
+  "version": 1,
   "namespace": "...",
   "frames": 442,
   "texture_bytes": 56173364,
@@ -176,13 +191,15 @@ you get a readable summary.
 
 ## Exit codes
 
-| Code | Meaning                 |
-| ---- | ----------------------- |
-| 0    | Success.                |
-| 1    | Failed.                 |
-| 3    | No daemon is listening. |
+| Code | Meaning                             |
+| ---- | ----------------------------------- |
+| 0    | Success.                            |
+| 1    | Failed.                             |
+| 3    | No daemon is listening.             |
+| 4    | The daemon speaks another protocol. |
 
-Code 3 is separate so a script can tell "start it first" from "something is broken".
+Codes 3 and 4 are separate because each has a remedy a script can act on: start the daemon,
+or restart it. Everything else is 1.
 
 ## Examples
 

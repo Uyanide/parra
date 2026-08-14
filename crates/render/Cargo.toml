@@ -23,6 +23,8 @@ khronos-egl = { version = "6.0.0", features = ["static"] }
 glow = "0.18.0"
 
 fast_image_resize = "6.1.0"
+# Dropping the defaults drops rayon, which nothing here calls, and an AVIF encoder that
+# cannot decode AVIF, and a few other rarely-used formats.
 image = { version = "0.25.10", default-features = false, features = [
     "bmp",
     "gif",

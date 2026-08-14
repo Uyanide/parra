@@ -106,10 +106,11 @@ fn run(cli: Cli, started: Instant) -> anyhow::Result<()> {
     }
 }
 
-/// Tell apart "not running" from "broken".
+/// Tell apart the failures with a known remedy from "broken".
 fn exit_code(error: &anyhow::Error) -> u8 {
     match error.downcast_ref::<ClientError>() {
         Some(ClientError::NotRunning { .. }) => cmd::EXIT_NOT_RUNNING,
+        Some(ClientError::Mismatch { .. }) => cmd::EXIT_PROTOCOL,
         _ => cmd::EXIT_FAILURE,
     }
 }

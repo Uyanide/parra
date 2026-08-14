@@ -185,12 +185,15 @@ to decode is reported in the log, rather to the requester.
 ## Checking it works
 
 ```sh
-parra ping     # protocol 4
+parra ping     # protocol 1
 parra state    # every output, what it shows, where its animations are
 ```
 
 `parra state` should list each connector with a size, a wallpaper path and a set of
 flags. If an output is missing, niri has not configured its layer surface yet.
+
+`ping` exits 4 when the daemon reports a protocol other than the one this binary speaks,
+which is a daemon still running from before the binary was replaced. Restart it.
 
 For scripts, `--json` prints the reply verbatim:
 

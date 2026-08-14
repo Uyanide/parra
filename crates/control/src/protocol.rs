@@ -4,9 +4,8 @@ use domain::{Facts, LogicalSize, MonitorState, OutputId, Rgba};
 use serde::{Deserialize, Serialize};
 
 /// Bumped whenever the wire format changes, including when it only gains a field.
-/// `Ping` reports it, so a client can tell a stale daemon from an unreachable one, and
-/// can tell whether a field it wants exists at all.
-pub const PROTOCOL_VERSION: u32 = 4;
+/// `Ping` reports it, which is the only way to tell a stale daemon from an unreachable one.
+pub const PROTOCOL_VERSION: u32 = 1;
 
 /// Every duration on the wire is in microseconds, so nothing has to be read twice to
 /// find out which unit it is in.

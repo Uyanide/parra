@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use thiserror::Error;
 
-use crate::protocol::{Request, Response};
+use crate::protocol::{PROTOCOL_VERSION, Request, Response};
 
 /// Long enough that a busy daemon is never mistaken for a hung one, short enough that a
 /// script does not wedge.
@@ -30,6 +30,8 @@ pub enum ClientError {
     },
     #[error("{message}")]
     Refused { message: String },
+    #[error("the daemon speaks protocol {daemon}, this build speaks {ours}; restart the daemon")]
+    Mismatch { daemon: u32, ours: u32 },
 }
 
 /// One connection to the daemon, one request at a time.
@@ -58,6 +60,27 @@ impl Client {
     /// Sends one request and returns the daemon's reply. An `Error` reply becomes
     /// [`ClientError::Refused`], so callers only handle failure in one place.
     pub fn request(&mut self, request: &Request) -> Result<Response, ClientError> {
+        let result = self.send(request);
+        match result {
+            Err(error @ (ClientError::Refused { .. } | ClientError::Malformed { .. })) => {
+                Err(self.diagnose(error))
+            }
+            other => other,
+        }
+    }
+
+    /// Restates a failure as [`ClientError::Mismatch`] when the versions disagree, since
+    /// rejected fields are what a skew looks like. Only a failing request pays the ping.
+    fn diagnose(&mut self, error: ClientError) -> ClientError {
+        match self.send(&Request::Ping) {
+            Ok(Response::Pong { version }) if version != PROTOCOL_VERSION => {
+                ClientError::Mismatch { daemon: version, ours: PROTOCOL_VERSION }
+            }
+            _ => error,
+        }
+    }
+
+    fn send(&mut self, request: &Request) -> Result<Response, ClientError> {
         let mut line = serde_json::to_string(request).expect("requests always serialize");
         line.push('\n');
 

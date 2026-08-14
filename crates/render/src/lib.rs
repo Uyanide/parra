@@ -1,7 +1,4 @@
 //! Pixels: Wayland surfaces, EGL/GLES contexts, image decoding and compositing.
-//!
-//! Which GPU this runs on is never asked: device selection belongs to the EGL
-//! implementation and the compositor's dmabuf feedback. See `docs/environment.md`.
 
 mod cache;
 mod decode;

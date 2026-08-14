@@ -6,11 +6,12 @@ pub mod state;
 use std::path::Path;
 
 use anyhow::Context as _;
-use control::{Client, Request, Response};
+use control::{Client, ClientError, PROTOCOL_VERSION, Request, Response};
 use domain::OutputId;
 
 pub const EXIT_FAILURE: u8 = 1;
 pub const EXIT_NOT_RUNNING: u8 = 3;
+pub const EXIT_PROTOCOL: u8 = 4;
 
 /// Sends one request and returns the reply, which is all every subcommand but `daemon`
 /// does.
@@ -27,8 +28,14 @@ pub fn reload(socket: &Path) -> anyhow::Result<()> {
 pub fn ping(socket: &Path) -> anyhow::Result<()> {
     match ask(socket, Request::Ping)? {
         Response::Pong { version } => {
+            // Reported before the verdict: a mismatch is exactly when the number is worth
+            // reading, so it belongs on stdout either way.
             println!("protocol {version}");
-            Ok(())
+            if version == PROTOCOL_VERSION {
+                Ok(())
+            } else {
+                Err(ClientError::Mismatch { daemon: version, ours: PROTOCOL_VERSION }.into())
+            }
         }
         other => Err(unexpected(&other)),
     }

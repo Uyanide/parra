@@ -160,9 +160,26 @@ mod tests {
         std::env::temp_dir().join(format!("control-{}-{unique}.sock", std::process::id()))
     }
 
+    /// A daemon of another build: it reports its own version and rejects what it cannot
+    /// parse, which is what a wire format that denies unknown fields does on a skew.
+    struct Stale;
+
+    impl Handler for Stale {
+        fn handle(&self, request: Request) -> Response {
+            match request {
+                Request::Ping => Response::Pong { version: PROTOCOL_VERSION + 1 },
+                _ => Response::Error { message: "unknown field `save`".to_owned() },
+            }
+        }
+    }
+
     fn listening(path: &Path) -> Server {
+        serving(path, Echo)
+    }
+
+    fn serving<H: Handler>(path: &Path, handler: H) -> Server {
         let server = Server::bind(path).expect("the socket should be free");
-        server.spawn(Echo).expect("the control thread should start");
+        server.spawn(handler).expect("the control thread should start");
         server
     }
 
@@ -187,6 +204,33 @@ mod tests {
         for _ in 0..3 {
             assert!(client.request(&Request::Ping).is_ok());
         }
+    }
+
+    #[test]
+    fn a_refusal_by_a_daemon_of_another_version_names_the_skew() {
+        let path = socket();
+        let _server = serving(&path, Stale);
+
+        let mut client = Client::connect(&path).unwrap();
+        let Err(error) = client.request(&Request::ReloadConfig) else {
+            panic!("a stale daemon must not accept this")
+        };
+        assert!(
+            matches!(error, ClientError::Mismatch { daemon, ours }
+                if daemon == PROTOCOL_VERSION + 1 && ours == PROTOCOL_VERSION),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_refusal_by_a_daemon_of_this_version_stays_a_refusal() {
+        let path = socket();
+        let _server = listening(&path);
+
+        let Err(error) = Client::connect(&path).unwrap().request(&Request::ReloadConfig) else {
+            panic!("the echo handler refuses everything but a ping")
+        };
+        assert!(matches!(error, ClientError::Refused { .. }), "{error:?}");
     }
 
     #[test]
