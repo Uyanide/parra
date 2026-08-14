@@ -1,7 +1,7 @@
 //! Compositor adaptation: the one place that knows how any particular compositor talks.
-//!
-//! Backends report facts. What the wallpaper does about them is decided in
-//! `domain::policy`, where the control socket's signals also arrive.
+
+// TODO: The current design is exclusively niri-shaped and NOT actually adaptable to
+//       other compositors.
 
 pub mod backends;
 pub mod event;

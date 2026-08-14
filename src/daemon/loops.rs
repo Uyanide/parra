@@ -89,7 +89,13 @@ pub fn run(config: Config, paths: &Paths, name: &str, started: Instant) -> anyho
     server.spawn(Bridge::new(calls))?;
     info!(socket = %server.path().display(), "listening for control connections");
 
-    let mut daemon = Daemon::new(renderer, config, paths.config.clone(), name.to_owned(), started);
+    // Before the daemon, which seeds the signals from it, and therefore before the first
+    // output can appear and ask what it should be showing.
+    let store = store::Store::open(&paths.state, &paths.cache_dir)?;
+    info!(state = %store.file().display(), cache = %store.cache_dir().display(), "remembering");
+
+    let mut daemon =
+        Daemon::new(renderer, config, paths.config.clone(), name.to_owned(), started, store);
     daemon.watcher = watch_config(&handle, &paths.config);
 
     // The compositor has already answered the surfaces created during connect, so there

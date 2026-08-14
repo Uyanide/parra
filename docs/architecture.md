@@ -2,7 +2,7 @@
 
 ## Why the crates are split
 
-Five library crates plus the root package, so that module boundaries are a compile error
+Six library crates plus the root package, so that module boundaries are a compile error
 rather than a convention.
 
 ```mermaid
@@ -11,25 +11,30 @@ graph TD
     root --> render
     root --> config
     root --> control
+    root --> store
     compositor --> domain
     render --> domain
+    render --> store
     config --> domain
     control --> domain
+    store --> domain
 ```
 
 The load-bearing property is what is _absent_: `render/Cargo.toml` does not list
 `compositor`, so the renderer physically cannot learn that niri exists. `compositor`
-cannot reach a rendering API. Neither can see `control`. Only the root package sees all
-of them, and it holds no logic of its own.
+cannot reach a rendering API. Neither can see `control`. `render` reaches `store` only to
+write a file atomically, and `store` never learns what an image is. Only the root package
+sees all of them, and it holds no logic of its own.
 
-| Crate        | Knows                                                           | Must not know                                                                      |
-| ------------ | --------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `domain`     | Identities, geometry, animation, resolved parameters, policy    | Wayland, OpenGL, compositors, files, sockets, the clock                            |
-| `compositor` | How one compositor talks and how to normalize what it says      | Blur, scroll offsets, config, rendering, the control socket                        |
-| `render`     | Wayland, EGL/GLES, image decoding, how to draw a `MonitorState` | Compositors, the control protocol, why a value is what it is, which GPU it runs on |
-| `config`     | The TOML surface, merge rules, file watching                    | Rendering, compositors, IPC                                                        |
-| `control`    | The request and response wire format, socket plumbing           | How to satisfy a request                                                           |
-| root package | How to wire the above together                                  | Anything else; it holds no logic                                                   |
+| Crate        | Knows                                                            | Must not know                                                                      |
+| ------------ | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `domain`     | Identities, geometry, animation, resolved parameters, policy     | Wayland, OpenGL, compositors, files, sockets, the clock                            |
+| `compositor` | How one compositor talks and how to normalize what it says       | Blur, scroll offsets, config, rendering, the control socket                        |
+| `render`     | Wayland, EGL/GLES, image decoding, how to draw a `MonitorState`  | Compositors, the control protocol, why a value is what it is, which GPU it runs on |
+| `config`     | The TOML surface, merge rules, file watching                     | Rendering, compositors, IPC                                                        |
+| `control`    | The request and response wire format, socket plumbing            | How to satisfy a request                                                           |
+| `store`      | What the daemon writes down and where, and writing it atomically | Rendering, compositors, the config file, why a wallpaper was chosen                |
+| root package | How to wire the above together                                   | Anything else; it holds no logic                                                   |
 
 `domain` depends only on `serde`. It has no clock: `tick(dt)` is fed elapsed time from
 outside, which is what makes the animation and policy layers testable without a display.
@@ -150,12 +155,27 @@ nothing is submitted, so the GPU drops to its lowest power state -- 240 MHz here
 milliseconds**, then back to 150 microseconds as it ramps. Sleeping properly is what makes
 waking up expensive, and the two budget lines are the same line read from two ends.
 
-Cold start is the one budget over its target. First frame lands at 316 to 361 ms for a
-2937x4796 wallpaper against a 200 ms target, and at 188 ms for a 2242x1365 one. About
-140 ms of that is fixed -- connecting, binding the layer surfaces, EGL, shaders -- and the
-rest is decoding, whose cost is set by the image. The target was written before either
-measurement and before decoding had a thread of its own; nothing on screen waits for
-anything else.
+Cold start was the one budget over its target: first frame at 316 to 361 ms for a
+2937x4796 wallpaper against a 200 ms target, and 188 ms for a 2242x1365 one. About 140 ms
+of that is fixed -- connecting, binding the layer surfaces, EGL, shaders -- and the rest
+was decoding, whose cost is set by the image.
+
+Keeping the chosen wallpaper already resized removes that second half. A restart reads a
+QOI file sized for the screen rather than decoding the original and resampling it, and
+lands at 93 to 178 ms here, inside the target. QOI because the crate is already linked
+for reading `.qoi` inputs, so it costs no dependency, and because decoding it is a
+memcpy-shaped loop rather than an entropy decode plus a Lanczos3 pass.
+
+The copy is written once per `parra set`, on the decode thread that already holds the
+pixels, so the cost lands where a wallpaper was changing anyway. It is used again for as
+long as it still covers what the outputs need, and re-made from the original when it does
+not -- which is what a rotation, a resolution change, a scale change or a smaller
+`crop-ratio` each amount to. Nothing waits for that: the old copy keeps drawing until the
+new one arrives.
+
+The configured fallback is not kept this way. It is what shows before anything has ever
+been chosen, and giving it a copy would mean a second thing deciding when a wallpaper's
+identity changes.
 
 **Geometry has one source.** The compositor reports which outputs exist; their size and
 scale come from Wayland. Buffers are allocated at `ceil(logical * scale)` device pixels,

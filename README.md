@@ -1,14 +1,25 @@
 # parra
 
-A wayland wallpaper daemon that supports:
+A wlr-layer-shell wallpaper daemon that supports animation effects:
 
 - **vertical parallax scrolling** that follows the workspace
-- **horizontal parallax scrolling** that follows the focusing column (disabled by default)
+- **horizontal parallax scrolling** that follows the focusing column (disabled
+  by default)
 - **blurring and tinting** that follows window focus
 - **zoom-in/out** that follows overview's close/open
 
-Only niri is supported so far. Support for more compositors might be added
-in the future.
+and acts exactly like what would be expected from such promgrams:
+
+- **control via IPC** including setting wallpapers, setting blurring, quering
+  status etc.
+- **live wallpaper switching** without restarting or reinitialize the daemon
+- **automatic wallpaper restoration** at the next start
+- **configuration override** per monitor
+
+> [!NOTE]
+>
+> Only niri is supported so far. Support for more compositors might be added
+> in the (near) future.
 
 ## Build
 
@@ -31,8 +42,8 @@ common:
 - [Usage](docs/usage.md) - compositor integration and instructions for normal usage
 - [Configuration](docs/config.md) — every key, and how per-output overrides inherit
 - [Control protocol](docs/control-protocol.md) — the socket, the CLI, exit codes
-- [Environment](docs/environment.md) — GPU selection, logging, and what is deliberately
-  not configurable
+- [Environment](docs/environment.md) — GPU selection, logging, where files go, and what is
+  deliberately not configurable
 
 development:
 

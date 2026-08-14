@@ -33,6 +33,22 @@ struct Cli {
     )]
     socket: Option<PathBuf>,
 
+    #[arg(
+        long,
+        global = true,
+        value_name = "PATH",
+        help = concat!("Remembered wallpaper [default: $XDG_STATE_HOME/", env!("CARGO_PKG_NAME"), "/state.toml]")
+    )]
+    state: Option<PathBuf>,
+
+    #[arg(
+        long,
+        global = true,
+        value_name = "PATH",
+        help = concat!("Resized wallpapers [default: $XDG_CACHE_HOME/", env!("CARGO_PKG_NAME"), "]")
+    )]
+    cache_dir: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -43,6 +59,8 @@ enum Command {
     Daemon(cmd::daemon::Args),
     /// Show the wallpaper at PATH.
     Set(cmd::set::Args),
+    /// Stop showing a wallpaper set earlier, falling back to what is underneath.
+    Unset(cmd::set::UnsetArgs),
     /// Turn the external blur signal on or off.
     Blur(cmd::blur::Args),
     /// Report what the daemon is currently showing.
@@ -70,10 +88,17 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli, started: Instant) -> anyhow::Result<()> {
-    let paths = paths::Paths::resolve(NAME, cli.config, cli.socket)?;
+    let overrides = paths::Overrides {
+        config: cli.config,
+        socket: cli.socket,
+        state: cli.state,
+        cache_dir: cli.cache_dir,
+    };
+    let paths = paths::Paths::resolve(NAME, overrides)?;
     match &cli.command {
         Command::Daemon(args) => cmd::daemon::run(args, &paths, NAME, started),
         Command::Set(args) => cmd::set::run(args, &paths.socket),
+        Command::Unset(args) => cmd::set::unset(args, &paths.socket),
         Command::Blur(args) => cmd::blur::run(args, &paths.socket),
         Command::State(args) => cmd::state::run(args, &paths.socket),
         Command::Reload => cmd::reload(&paths.socket),

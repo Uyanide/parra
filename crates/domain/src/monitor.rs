@@ -1,4 +1,4 @@
-use crate::anim::{Animated, Motion};
+use crate::anim::Motion;
 use crate::blur::BlurState;
 use crate::geometry::{UvRect, sample_rect};
 use crate::output::{LogicalSize, OutputId, PixelSize, Scale};
@@ -6,11 +6,13 @@ use crate::params::OutputParams;
 use crate::policy::Targets;
 use crate::scroll::ScrollState;
 use crate::wallpaper::{WallpaperRef, WallpaperSlot};
+use crate::zoom::ZoomState;
 
-/// Everything the renderer needs about one output.
+/// Live state of one output: its geometry, what it is showing, and the animations
+/// currently in flight on it.
 ///
-/// Each output owns its own animation clocks, so two monitors refreshing at different
-/// rates advance independently and one of them settling stops its frames alone.
+/// Every clock here belongs to this output alone, so outputs refreshing at different
+/// rates advance and settle independently.
 #[derive(Clone, Debug)]
 pub struct MonitorState {
     pub id: OutputId,
@@ -20,14 +22,13 @@ pub struct MonitorState {
     pub wallpaper: WallpaperSlot,
     pub scroll: ScrollState,
     pub blur: BlurState,
-    pub zoom: Animated,
-    /// Last wallpaper the config asked for. Kept so that a reload can tell an edited
-    /// path from one the control socket set, and leave the latter alone.
-    config_wallpaper: Option<WallpaperRef>,
+    pub zoom: ZoomState,
 }
 
 impl MonitorState {
-    pub fn new(id: OutputId, params: OutputParams) -> Self {
+    /// `wallpaper` is snapped rather than faded in: coming into existence should not look
+    /// like a transition.
+    pub fn new(id: OutputId, params: OutputParams, wallpaper: Option<WallpaperRef>) -> Self {
         let mut state = Self {
             id,
             logical: LogicalSize::default(),
@@ -35,12 +36,10 @@ impl MonitorState {
             wallpaper: WallpaperSlot::new(),
             scroll: ScrollState::new(),
             blur: BlurState::new(),
-            zoom: Animated::new(params.overview.zoom()),
-            config_wallpaper: params.wallpaper.clone(),
+            zoom: ZoomState::new(params.overview.zoom()),
             params,
         };
-        let initial = state.config_wallpaper.clone();
-        state.wallpaper.set(initial, &crate::params::TransitionParams::INSTANT);
+        state.wallpaper.set(wallpaper, &crate::params::TransitionParams::INSTANT);
         state
     }
 
@@ -54,24 +53,18 @@ impl MonitorState {
         sample_rect(
             image,
             self.buffer_size(),
-            self.zoom.value(),
+            self.zoom.factor.value(),
             self.scroll.h.value(),
             self.scroll.v.value(),
         )
     }
 
-    /// Adopts a reloaded configuration. Returns whether the wallpaper changed, which is
-    /// the only part that costs a decode.
-    pub fn apply_params(&mut self, params: OutputParams) -> bool {
-        let wallpaper = params.wallpaper.clone();
-        let changed = wallpaper != self.config_wallpaper;
-        self.config_wallpaper = wallpaper.clone();
+    /// Adopts a reloaded configuration.
+    pub fn apply_params(&mut self, params: OutputParams) {
         self.params = params;
-        changed && self.set_wallpaper(wallpaper)
     }
 
-    /// Sets the wallpaper directly, as the control socket does. Returns whether it
-    /// differs from what is already showing, which is what costs a decode.
+    /// Sets the wallpaper. Returns whether it differs from what is already showing.
     pub fn set_wallpaper(&mut self, next: Option<WallpaperRef>) -> bool {
         self.wallpaper.set(next, &self.params.transition)
     }
@@ -84,16 +77,15 @@ impl MonitorState {
         self.scroll.v.retarget(targets.scroll_v, scroll.vertical.tween);
         self.scroll.h.retarget(targets.scroll_h, scroll.horizontal.tween);
         self.blur.amount.retarget(targets.blur, blur.tween);
-        self.zoom.retarget(targets.zoom, overview.tween);
+        self.zoom.factor.retarget(targets.zoom, overview.tween);
     }
 
-    /// Jumps to the targets. Used on the first resolve for an output, so that appearing
-    /// on screen is not itself an animation.
+    /// Jumps to the targets, for when arriving at them should not itself be an animation.
     pub fn snap(&mut self, targets: &Targets) {
         self.scroll.v.snap(targets.scroll_v);
         self.scroll.h.snap(targets.scroll_h);
         self.blur.amount.snap(targets.blur);
-        self.zoom.snap(targets.zoom);
+        self.zoom.factor.snap(targets.zoom);
     }
 
     pub fn tick(&mut self, dt: f32) -> Motion {
@@ -104,7 +96,7 @@ impl MonitorState {
         self.scroll.v.is_settled()
             && self.scroll.h.is_settled()
             && self.blur.amount.is_settled()
-            && self.zoom.is_settled()
+            && self.zoom.factor.is_settled()
             && self.wallpaper.is_settled()
     }
 }
@@ -115,7 +107,7 @@ mod tests {
     use crate::params::{TransitionMode, TransitionParams};
 
     fn monitor() -> MonitorState {
-        let mut state = MonitorState::new(OutputId::new("DP-1"), OutputParams::default());
+        let mut state = MonitorState::new(OutputId::new("DP-1"), OutputParams::default(), None);
         state.logical = LogicalSize::new(2560, 1440);
         state
     }
@@ -165,38 +157,30 @@ mod tests {
     }
 
     #[test]
-    fn a_reload_leaves_a_socket_set_wallpaper_alone() {
-        let params = OutputParams {
-            wallpaper: Some(WallpaperRef::new("/tmp/from-config.png")),
-            ..OutputParams::default()
-        };
-        let mut state = MonitorState::new(OutputId::new("DP-1"), params.clone());
-        state.set_wallpaper(Some(WallpaperRef::new("/tmp/from-socket.png")));
-
-        assert!(!state.apply_params(params), "an unchanged config should not reclaim the slot");
-        assert_eq!(
-            state.wallpaper.current().map(WallpaperRef::path),
-            Some(std::path::Path::new("/tmp/from-socket.png"))
+    fn a_monitor_appears_already_showing_its_wallpaper() {
+        let wallpaper = WallpaperRef::new("/tmp/a.png");
+        let state = MonitorState::new(
+            OutputId::new("DP-1"),
+            OutputParams::default(),
+            Some(wallpaper.clone()),
         );
+        assert_eq!(state.wallpaper.current(), Some(&wallpaper));
+        assert!(state.is_settled(), "appearing should not look like a transition");
     }
 
     #[test]
-    fn a_reload_that_edits_the_path_does_take_effect() {
-        let params = OutputParams {
-            wallpaper: Some(WallpaperRef::new("/tmp/from-config.png")),
-            ..OutputParams::default()
-        };
-        let mut state = MonitorState::new(OutputId::new("DP-1"), params);
+    fn a_reload_leaves_the_wallpaper_to_the_caller() {
+        let mut state = monitor();
         state.set_wallpaper(Some(WallpaperRef::new("/tmp/from-socket.png")));
 
-        let edited = OutputParams {
-            wallpaper: Some(WallpaperRef::new("/tmp/edited.png")),
+        state.apply_params(OutputParams {
+            fallback: Some(WallpaperRef::new("/tmp/from-config.png")),
             ..OutputParams::default()
-        };
-        assert!(state.apply_params(edited));
+        });
+
         assert_eq!(
             state.wallpaper.current().map(WallpaperRef::path),
-            Some(std::path::Path::new("/tmp/edited.png"))
+            Some(std::path::Path::new("/tmp/from-socket.png"))
         );
     }
 
@@ -218,7 +202,7 @@ mod tests {
             },
             ..OutputParams::default()
         };
-        let mut state = MonitorState::new(OutputId::new("DP-1"), params);
+        let mut state = MonitorState::new(OutputId::new("DP-1"), params, None);
         state.set_wallpaper(Some(WallpaperRef::new("/tmp/a.png")));
         state.set_wallpaper(Some(WallpaperRef::new("/tmp/b.png")));
 

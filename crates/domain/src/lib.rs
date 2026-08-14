@@ -1,8 +1,5 @@
-//! Shared state model: identities, geometry, animation, resolved parameters and the
-//! policy that turns compositor facts into animation targets.
-//!
-//! Depends only on `serde`, and holds no clock: elapsed time is fed to `tick` from
-//! outside, which is what makes animation and policy testable without a display.
+//! The state model the rest of the daemon agrees on, and the policy that turns
+//! compositor facts into animation targets.
 
 pub mod anim;
 pub mod blur;
@@ -14,6 +11,7 @@ pub mod params;
 pub mod policy;
 pub mod scroll;
 pub mod wallpaper;
+pub mod zoom;
 
 pub use anim::{Animated, Easing, Motion, Tween};
 pub use blur::BlurState;
@@ -25,6 +23,7 @@ pub use params::{
     AxisParams, BlurParams, Layer, OutputParams, OverviewParams, ScrollParams, SurfaceParams,
     TransitionMode, TransitionParams,
 };
-pub use policy::{Facts, Index, OutputFacts, Signals, Targets};
+pub use policy::{Facts, Index, OutputFacts, Signals, Targets, wallpaper_for};
 pub use scroll::ScrollState;
 pub use wallpaper::{WallpaperRef, WallpaperSlot};
+pub use zoom::ZoomState;

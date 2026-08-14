@@ -20,6 +20,10 @@ const OPENGL_ES3_BIT: egl::Int = 0x0040;
 /// blocking swap would stall the whole single-threaded event loop behind one monitor.
 const SWAP_IMMEDIATE: egl::Int = 0;
 
+/// Smallest `GL_MAX_TEXTURE_SIZE` GLES 3.0 permits, and therefore the floor for what a
+/// driver's answer is believed to mean.
+const MIN_MAX_TEXTURE: u32 = 2048;
+
 /// One EGL display and one context, shared by every output, which is what lets two
 /// monitors sample the same wallpaper texture instead of holding a copy each.
 pub struct Gl {
@@ -34,6 +38,9 @@ pub struct Gl {
     /// Whether this driver can time a frame. Decided once, because an extension does not
     /// appear halfway through a session.
     timing: bool,
+    /// `GL_MAX_TEXTURE_SIZE`, the largest edge this driver will allocate. Asked once: it
+    /// is a property of the implementation and does not change.
+    max_texture: u32,
     pub api: glow::Context,
 }
 
@@ -86,7 +93,19 @@ impl Gl {
             );
         }
 
-        Ok(Self { egl, display, config, context, offscreen, timing, api })
+        // GLES3 guarantees at least 2048, so a driver reporting less is reporting nonsense
+        // and the guaranteed minimum is a better answer than a texture nothing can hold.
+        let reported = unsafe { api.get_parameter_i32(glow::MAX_TEXTURE_SIZE) };
+        let max_texture = u32::try_from(reported).unwrap_or(0).max(MIN_MAX_TEXTURE);
+        debug!(max_texture, "largest texture this driver will allocate");
+
+        Ok(Self { egl, display, config, context, offscreen, timing, max_texture, api })
+    }
+
+    /// Largest edge a texture may have here. The size policy clamps to it, so a deep zoom
+    /// on a large monitor asks for something the driver can actually give.
+    pub fn max_texture_size(&self) -> u32 {
+        self.max_texture
     }
 
     /// Binds the context to work that belongs to no output: every texture upload and

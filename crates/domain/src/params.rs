@@ -4,28 +4,30 @@ use crate::anim::{Easing, Tween};
 use crate::color::Rgba;
 use crate::wallpaper::WallpaperRef;
 
-/// Smallest crop ratio the geometry stays well behaved at. The zoom factor is its
-/// reciprocal, so this bounds how far the image may be enlarged.
-pub const MIN_CROP_RATIO: f32 = 0.01;
+/// Smallest crop ratio the geometry stays well behaved at. Smaller ratio results in
+/// larger zoom factors, larger size limits, and therefore possibly more resource
+/// consumption.
+pub const MIN_CROP_RATIO: f32 = 0.25;
 
-/// Everything the daemon needs to know about one output, after the config file's global
-/// section and that output's override have been merged.
+/// One output's settings, fully resolved: nothing here is optional and nothing is still
+/// inherited from elsewhere.
 ///
-/// The semantic form: durations in seconds, colours parsed, paths expanded. `config`
-/// produces it, `policy` and `render` consume it.
+/// The semantic form rather than the text one:
+///   - durations in seconds
+///   - colours parsed
+///   - paths expanded.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct OutputParams {
-    pub wallpaper: Option<WallpaperRef>,
+    /// What to show when nothing more specific was asked for. Named for the config key
+    /// it comes from, so the two cannot drift apart.
+    pub fallback: Option<WallpaperRef>,
     pub scroll: ScrollParams,
     pub blur: BlurParams,
     pub overview: OverviewParams,
     pub transition: TransitionParams,
 }
 
-/// The two parallax axes, each configured on its own.
-///
-/// A compositor animates a workspace switch and a column move separately, and a wallpaper
-/// that has to match both cannot do it with one shared curve.
+/// The two parallax axes, each configured separately.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScrollParams {
     /// Follows the active workspace.
@@ -125,7 +127,7 @@ impl Default for TransitionParams {
 }
 
 impl TransitionParams {
-    /// Swaps with no animation. Used for the first wallpaper an output ever shows.
+    /// Swaps with no animation, whatever mode is configured.
     pub const INSTANT: TransitionParams =
         TransitionParams { mode: TransitionMode::None, tween: Tween::INSTANT };
 
@@ -143,7 +145,7 @@ impl TransitionParams {
 pub enum TransitionMode {
     #[default]
     None,
-    /// Held in the outgoing slot and animated here; the renderer still swaps instantly.
+    /// The outgoing wallpaper is kept and faded out rather than dropped at once.
     Fade,
 }
 

@@ -21,7 +21,8 @@ use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
 
 use super::globals::OUTPUT_VERSION;
 use super::surface::Pacing;
-use super::{Output, RenderEvent, State, Surface};
+use super::{Output, State, Surface};
+use crate::event::RenderEvent;
 
 /// Cover the whole output and ignore every other exclusive zone, so panels do not carve
 /// pieces out of the wallpaper.

@@ -4,14 +4,28 @@ Several things the daemon needs are already decided by mechanisms outside it. It
 those and adds no control of its own, since a second control point would be a second
 source of truth.
 
-| What                           | Decided by                                             | What the daemon does                                                |
-| ------------------------------ | ------------------------------------------------------ | ------------------------------------------------------------------- |
-| Rendering GPU and driver       | libglvnd and driver environment variables              | Nothing. It does not enumerate or select devices.                   |
-| Which GPU buffers come from    | The compositor, via `zwp_linux_dmabuf_v1` feedback     | Nothing. It does not allocate dmabufs.                              |
-| Wayland connection             | `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`                   | Connects with a null display name and lets libwayland resolve it.   |
-| Compositor IPC socket          | Whatever the compositor exports, such as `NIRI_SOCKET` | Reads that variable. No path is hardcoded.                          |
-| Config and runtime directories | XDG Base Directory                                     | Derives paths from `XDG_CONFIG_HOME`, `HOME` and `XDG_RUNTIME_DIR`. |
-| Log level and filtering        | `RUST_LOG`                                             | Reads it. There is no config key for verbosity.                     |
+| What                           | Decided by                                             | What the daemon does                                                                                    |
+| ------------------------------ | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| Rendering GPU and driver       | libglvnd and driver environment variables              | Nothing. It does not enumerate or select devices.                                                       |
+| Which GPU buffers come from    | The compositor, via `zwp_linux_dmabuf_v1` feedback     | Nothing. It does not allocate dmabufs.                                                                  |
+| Wayland connection             | `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`                   | Connects with a null display name and lets libwayland resolve it.                                       |
+| Compositor IPC socket          | Whatever the compositor exports, such as `NIRI_SOCKET` | Reads that variable. No path is hardcoded.                                                              |
+| Where every file it owns lives | XDG Base Directory                                     | Derives paths from `XDG_CONFIG_HOME`, `XDG_RUNTIME_DIR`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` and `HOME`. |
+| Log level and filtering        | `RUST_LOG`                                             | Reads it. There is no config key for verbosity.                                                         |
+
+## Where things go
+
+| Variable          | Falls back to        | Holds                                           |
+| ----------------- | -------------------- | ----------------------------------------------- |
+| `XDG_CONFIG_HOME` | `$HOME/.config`      | `parra/config.toml`                             |
+| `XDG_RUNTIME_DIR` | nothing; required    | `parra-$WAYLAND_DISPLAY.sock`                   |
+| `XDG_STATE_HOME`  | `$HOME/.local/state` | `parra/state.toml`, the wallpaper to restore    |
+| `XDG_CACHE_HOME`  | `$HOME/.cache`       | `parra/*.qoi`, those wallpapers already resized |
+
+`--config`, `--socket`, `--state` and `--cache-dir` override the four, and work on any
+subcommand. Two daemons on two Wayland displays share the last two unless told otherwise;
+the recovery is regeneration from the original, so the cost of not separating them is a
+slow start rather than a wrong wallpaper.
 
 ## Choosing a GPU
 

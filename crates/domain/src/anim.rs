@@ -45,10 +45,6 @@ impl Easing {
 }
 
 /// How long a move takes and the shape it takes it in.
-///
-/// The two always travel together: every animated quantity is configured by exactly this
-/// pair, and this is the only kind of animation the project has. Naming it keeps blur,
-/// zoom, the wallpaper fade and both scroll axes from each restating it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tween {
     pub duration: f32,
@@ -56,7 +52,7 @@ pub struct Tween {
 }
 
 impl Tween {
-    /// No animation at all, for initial state and for the modes that swap outright.
+    /// No animation at all: the value is wherever it was last put.
     pub const INSTANT: Tween = Tween { duration: 0.0, easing: Easing::Linear };
 
     pub const fn new(duration: f32, easing: Easing) -> Self {
@@ -68,8 +64,7 @@ impl Tween {
     }
 }
 
-/// Whether anything is still moving. The render loop asks for another frame callback
-/// only while some output reports [`Motion::Running`], which is what makes idle free.
+/// Whether anything is still moving.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Motion {
     Settled,

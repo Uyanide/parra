@@ -1,9 +1,6 @@
 use crate::output::PixelSize;
 
 /// Region of the source image that fills the viewport, in normalized image coordinates.
-///
-/// The renderer turns this straight into texture coordinates, so panning costs one
-/// uniform: no pixels move and nothing is re-uploaded.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UvRect {
     pub u0: f32,
@@ -27,11 +24,14 @@ impl UvRect {
 /// Fits the image over the viewport, zooms in by `zoom`, then pans within whatever
 /// headroom that leaves.
 ///
-/// The fit always covers: the image is scaled until it spans both axes, so no letterbox
-/// can appear. Whatever the cover leaves outside the viewport, plus whatever `zoom`
-/// adds, becomes the travel that `scroll_v` and `scroll_h` move through. Both are
-/// fractions of that travel, `0` at the top or left edge and `1` at the bottom or right.
-/// An axis with no headroom ignores its value.
+/// - The fit always covers: the image is scaled until it spans both axes, so no
+///   letterbox can appear.
+/// - `zoom` never drops below `1`: the cover is already the largest rect that keeps the
+///   viewport's aspect, so a smaller or non-finite factor counts as `1`.
+/// - The travel is what the cover leaves outside the viewport, plus what `zoom` adds.
+/// - `scroll_h` and `scroll_v` are fractions of that travel, `0` at the left or top edge
+///   and `1` at the right or bottom.
+/// - An axis with no headroom ignores its value.
 pub fn sample_rect(
     image: PixelSize,
     viewport: PixelSize,
@@ -51,7 +51,7 @@ pub fn sample_rect(
         (1.0, image_aspect / viewport_aspect)
     };
 
-    let zoom = if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 };
+    let zoom = if zoom.is_finite() { zoom.max(1.0) } else { 1.0 };
     let w = (cover_w / zoom).clamp(f32::MIN_POSITIVE, 1.0);
     let h = (cover_h / zoom).clamp(f32::MIN_POSITIVE, 1.0);
 
@@ -123,7 +123,7 @@ mod tests {
     fn the_rect_never_leaves_the_image() {
         let image = PixelSize::new(3840, 2160);
         let viewport = PixelSize::new(2560, 1600);
-        for zoom in [0.5, 1.0, 1.111, 4.0] {
+        for zoom in [1.0, 1.111, 4.0] {
             for scroll in [0.0, 0.37, 1.0] {
                 let rect = sample_rect(image, viewport, zoom, scroll, scroll);
                 assert!(rect.u0 >= -EPS && rect.u1 <= 1.0 + EPS, "u out of range at {zoom}");
@@ -140,11 +140,20 @@ mod tests {
     }
 
     #[test]
+    fn a_zoom_below_one_is_floored_rather_than_zooming_out() {
+        let image = PixelSize::new(3840, 2160);
+        let viewport = PixelSize::new(2560, 1600);
+        let unzoomed = sample_rect(image, viewport, 1.0, 0.37, 0.37);
+        for zoom in [0.5, 0.9, f32::MIN_POSITIVE] {
+            assert_eq!(sample_rect(image, viewport, zoom, 0.37, 0.37), unzoomed, "zoom {zoom}");
+        }
+    }
+
+    #[test]
     fn a_nonsensical_zoom_is_ignored_rather_than_propagated() {
         let square = PixelSize::new(100, 100);
         for zoom in [0.0, -1.0, f32::NAN, f32::INFINITY] {
-            let rect = sample_rect(square, square, zoom, 0.5, 0.5);
-            assert!(rect.width() > 0.0 && rect.height() > 0.0, "zoom {zoom} produced {rect:?}");
+            assert_eq!(sample_rect(square, square, zoom, 0.5, 0.5), UvRect::FULL, "zoom {zoom}");
         }
     }
 }

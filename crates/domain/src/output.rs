@@ -123,13 +123,13 @@ impl PixelSize {
         u64::from(self.w) * u64::from(self.h)
     }
 
-    /// At least one pixel on each axis. Native surfaces and textures reject zero, and a
-    /// monitor can legitimately report an empty size while it is being configured.
+    /// At least one pixel on each axis. A monitor can legitimately report an empty size
+    /// while it is being configured, and no buffer of that size exists.
     pub fn max_one(self) -> Self {
         Self { w: self.w.max(1), h: self.h.max(1) }
     }
 
-    /// The smallest size covering both, used when two outputs share one wallpaper.
+    /// The smallest size covering both.
     pub fn union(self, other: Self) -> Self {
         Self { w: self.w.max(other.w), h: self.h.max(other.h) }
     }

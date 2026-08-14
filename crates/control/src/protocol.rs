@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 /// Bumped whenever the wire format changes, including when it only gains a field.
 /// `Ping` reports it, so a client can tell a stale daemon from an unreachable one, and
 /// can tell whether a field it wants exists at all.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Every duration on the wire is in microseconds, so nothing has to be read twice to
 /// find out which unit it is in.
@@ -24,7 +24,20 @@ pub enum Request {
     /// `output: null` addresses every output.
     SetWallpaper {
         output: Option<OutputId>,
-        path: PathBuf,
+        /// `null` empties the addressed slot instead of filling it, so an output that was
+        /// given its own image goes back to the broadcast one, or to the configured
+        /// fallback.
+        ///
+        /// `deserialize_with` only to make the field required: serde lets an `Option` be
+        /// omitted entirely, and a client whose path came out undefined would then clear
+        /// a wallpaper instead of being told it sent nonsense.
+        #[serde(deserialize_with = "Option::deserialize")]
+        path: Option<PathBuf>,
+        /// Whether this choice outlives the daemon. False shows the image now and leaves
+        /// the remembered one alone, so the next start goes back to it. Defaulted, so a
+        /// client that has never heard of it still gets the behaviour everyone expects.
+        #[serde(default = "yes")]
+        save: bool,
     },
     /// The external blur signal, for whatever is drawing over the wallpaper.
     SetBlur {
@@ -33,6 +46,12 @@ pub enum Request {
     },
     ReloadConfig,
     Ping,
+}
+
+/// Default for `SetWallpaper::save`: remembering a choice is what a wallpaper setter is
+/// for, so not remembering it has to be asked for.
+fn yes() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -141,7 +160,7 @@ impl OutputSnapshot {
                 downscale: state.params.blur.downscale,
                 tint: state.params.blur.effective_tint(),
             },
-            zoom: tween(&state.zoom),
+            zoom: tween(&state.zoom.factor),
             focused: facts.is_focused(&state.id),
             overview: facts.overview_active,
             workspace: IndexSnapshot {
@@ -177,7 +196,12 @@ mod tests {
         let requests = [
             Request::GetState,
             Request::GetOutput { output: OutputId::new("DP-1") },
-            Request::SetWallpaper { output: None, path: PathBuf::from("/srv/a.png") },
+            Request::SetWallpaper {
+                output: None,
+                path: Some(PathBuf::from("/srv/a.png")),
+                save: true,
+            },
+            Request::SetWallpaper { output: Some(OutputId::new("DP-1")), path: None, save: true },
             Request::SetBlur { output: Some(OutputId::new("eDP-1")), on: true },
             Request::ReloadConfig,
             Request::Ping,
@@ -201,6 +225,32 @@ mod tests {
         })
         .unwrap();
         assert_eq!(line, r#"{"set-blur":{"output":"DP-1","on":true}}"#);
+    }
+
+    #[test]
+    fn a_client_that_omits_save_still_gets_its_wallpaper_remembered() {
+        let line = r#"{"set-wallpaper":{"output":null,"path":"/srv/a.png"}}"#;
+        assert_eq!(
+            serde_json::from_str::<Request>(line).unwrap(),
+            Request::SetWallpaper {
+                output: None,
+                path: Some(PathBuf::from("/srv/a.png")),
+                save: true,
+            }
+        );
+    }
+
+    #[test]
+    fn a_null_path_clears_but_a_missing_one_is_refused() {
+        let line = r#"{"set-wallpaper":{"output":"DP-1","path":null}}"#;
+        assert_eq!(
+            serde_json::from_str::<Request>(line).unwrap(),
+            Request::SetWallpaper { output: Some(OutputId::new("DP-1")), path: None, save: true }
+        );
+        assert!(
+            serde_json::from_str::<Request>(r#"{"set-wallpaper":{"output":"DP-1"}}"#).is_err(),
+            "a dropped field must not read as a wallpaper being cleared"
+        );
     }
 
     #[test]

@@ -29,9 +29,6 @@ downscale = 2
 blur.radius = 16   # downscale stays 2
 ```
 
-Blur and scrolling are per output and independent: one monitor can be blurred and
-scrolled while another is sharp and still.
-
 ## Keys
 
 ### `[general]`
@@ -48,9 +45,13 @@ effect on the **next start**.
 
 ### `[wallpaper]`
 
-| Key    | Default | Meaning                                                               |
-| ------ | ------- | --------------------------------------------------------------------- |
-| `path` | unset   | Image to display. Unset starts blank, waiting for the control socket. |
+| Key        | Default | Meaning                                                                              |
+| ---------- | ------- | ------------------------------------------------------------------------------------ |
+| `fallback` | unset   | What to show when nothing has been set over the control socket. Unset shows nothing. |
+
+`parra set` is remembered across restarts and takes precedence over this, so `fallback`
+is what a monitor shows before anything has ever been chosen for it, and what it falls
+back to if the chosen image will not load. See [state and cache](#state-and-cache).
 
 Paths may be absolute, start with `~/`, or be relative. A relative path resolves against
 the config file's own directory, since a daemon's working directory is not something a
@@ -61,17 +62,16 @@ later, rather than a configuration error.
 
 ### `[scroll.vertical]` and `[scroll.horizontal]`
 
-The two parallax axes take the same four keys and are configured apart, because a
-compositor animates a workspace switch and a column move as two separate animations that
-need not agree. The vertical axis follows the active workspace, the horizontal one the
-column in the scrolling layout. Both are per output.
+The two parallax axes take the same four keys and are configured apart. The vertical axis
+follows the active workspace, the horizontal one the column in the scrolling layout. Both
+are per output.
 
-| Key           | Default                              | Meaning                                                                                                                                                             |
-| ------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`     | `true` vertical, `false` horizontal  | When false the image is pinned to its centre on that axis. Enabling `[scroll.horizontal]` is all that turning on horizontal parallax takes.                          |
-| `travel`      | `1.0`                                | Fraction of the available travel to use, `0..=1`, measured about the centre. `0.5` halves the excursion in both directions rather than biasing it toward one edge. |
-| `duration-ms` | `400`                                | `0` makes the move instant. Capped at 60000.                                                                                                                        |
-| `easing`      | `"out-cubic"`                        | See below.                                                                                                                                                          |
+| Key           | Default                             | Meaning                                                                      |
+| ------------- | ----------------------------------- | ---------------------------------------------------------------------------- |
+| `enabled`     | `true` vertical, `false` horizontal | When false the image is pinned to its centre on that axis.                   |
+| `travel`      | `1.0`                               | Fraction of the available travel to use, `0..=1`, measured about the centre. |
+| `duration-ms` | `400`                               | `0` makes the move instant. Capped at 60000.                                 |
+| `easing`      | `"out-cubic"`                       | See [easing functions](#easing-functions).                                   |
 
 ```toml
 [scroll.vertical]
@@ -83,20 +83,20 @@ duration-ms = 250   # travel and easing stay at their defaults
 ```
 
 Each monitor scrolls by its own active workspace and that workspace's own column, so a
-monitor without the focus holds its position rather than drifting to the centre. A
+monitor without the focus holds its position rather than drifting to other positions. A
 workspace nothing has been focused on yet sits centred, and so does a monitor whose
 focused window is floating or fullscreen and therefore has no place in the scroll.
 
 ### `[blur]`
 
-| Key            | Default          | Meaning                                                                                                                                                               |
-| -------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `radius`       | `32`             | `0` disables blur entirely, including the bake. Capped at 512.                                                                                                        |
-| `downscale`    | `4`              | Linear downscale of the baked blur texture, `1..=16`. Higher is cheaper in both VRAM and bake time; blur removes the detail that downsampling would have cost anyway. |
-| `tint`         | `"#1e1e2e"`      | `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`.                                                                                                                            |
-| `tint-opacity` | `0.5`            | `0..=1`, multiplied into the tint's own alpha.                                                                                                                        |
-| `duration-ms`  | `400`            |                                                                                                                                                                       |
-| `easing`       | `"in-out-cubic"` |                                                                                                                                                                       |
+| Key            | Default          | Meaning                                                                                             |
+| -------------- | ---------------- | --------------------------------------------------------------------------------------------------- |
+| `radius`       | `32`             | `0` disables blur entirely, including the bake. Capped at 512.                                      |
+| `downscale`    | `4`              | Linear downscale of the baked blur texture, `1..=16`. Higher is cheaper in both VRAM and bake time. |
+| `tint`         | `"#1e1e2e"`      | `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`.                                                          |
+| `tint-opacity` | `0.5`            | `0..=1`, multiplied into the tint's own alpha.                                                      |
+| `duration-ms`  | `400`            |                                                                                                     |
+| `easing`       | `"in-out-cubic"` | See [easing functions](#easing-functions).                                                          |
 
 An output blurs when it holds the focused window, or when the control socket has asked
 for it. Nothing focused anywhere leaves every output sharp.
@@ -105,11 +105,17 @@ for it. Nothing focused anywhere leaves every output sharp.
 
 | Key           | Default       | Meaning                                                                                                                                                                                                           |
 | ------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `crop-ratio`  | `0.9`         | Fraction of the image visible while the overview is closed, `0.01..=1`. The remainder is the headroom the parallax travels through, so `1.0` leaves nothing to scroll unless the image is taller than the screen. |
+| `crop-ratio`  | `0.9`         | Fraction of the image visible while the overview is closed, `0.25..=1`. The remainder is the headroom the parallax travels through, so `1.0` leaves nothing to scroll unless the image is taller than the screen. |
 | `duration-ms` | `400`         |                                                                                                                                                                                                                   |
-| `easing`      | `"out-cubic"` |                                                                                                                                                                                                                   |
+| `easing`      | `"out-cubic"` | See [easing functions](#easing-functions).                                                                                                                                                                        |
 
 Opening the overview zooms back out to show the whole image.
+
+The wallpaper is decoded at the size the deepest zoom needs, `monitor / crop-ratio` per
+axis, so the lower this is the more texture memory the image costs: at `0.25` that is
+sixteen times the area of the screen, around 370 MB for a 3200x1800 output. That is the
+reason for the floor, along with an absolute clamp at whatever `GL_MAX_TEXTURE_SIZE` the
+driver reports.
 
 ### `[transition]`
 
@@ -119,6 +125,49 @@ Opening the overview zooms back out to show the whole image.
 | `duration-ms` | `400`            |                                                                                                              |
 | `easing`      | `"in-out-cubic"` |                                                                                                              |
 
+## State and cache
+
+Two more locations, neither of them meant to be edited by hand. `--state PATH` and
+`--cache-dir PATH` override them.
+
+| Location                           | Holds                                                                        |
+| ---------------------------------- | ---------------------------------------------------------------------------- |
+| `$XDG_STATE_HOME/parra/state.toml` | Which wallpaper each slot was last set to, so a restart restores it.         |
+| `$XDG_CACHE_HOME/parra/*.qoi`      | Those wallpapers, already resized, so a restart skips decoding the original. |
+
+`$HOME/.local/state` and `$HOME/.cache` are the fallbacks, as the XDG specification
+prescribes.
+
+The state file records the path you asked for, never the copy. It is rewritten by `parra
+set` and `parra unset` and by nothing else, so an image that will not load stays recorded:
+the daemon logs it, falls back for that session, and tries again on the next start.
+Deleting either location is safe. The state file is what a restart shows; the cache is
+only speed, and every file in it can be produced again from the original.
+
+Do _NOT_ edit it by hand. The daemon reads it once at startup and rewrites it whole on
+every change, so an edit made while it is running is overwritten with no warning. Use
+`parra unset` to take back a wallpaper:
+
+```sh
+parra unset --output DP-1     # DP-1 goes back to whatever every output is on
+parra unset                   # every output goes back to `fallback`
+```
+
+Clearing reveals rather than blanks, walking the same order the daemon resolves in: an
+output's own wallpaper, then the one set for every output, then `fallback`, then nothing.
+The copy of whatever is dropped is swept in the same breath.
+
+A copy is kept at the size the largest monitor showing it needs. It is used again as long
+as it still covers that, and re-made from the original when it does not, which is what a
+rotation, a resolution change, a scale change or a smaller `crop-ratio` all amount to.
+The old copy keeps drawing meanwhile, so nothing stalls. Copies no longer pointed at are
+deleted when the daemon starts and after every `set` or `unset`.
+
+`--no-save` works on both and means the same thing on each: change what is on screen now
+and leave the file alone, so the next start goes back to what it records. On `set` that is
+a wallpaper shown without being adopted; on `unset` it is one dropped without being
+forgotten.
+
 ## Easing functions
 
 `linear`, `out-quad`, `in-out-quad`, `out-cubic`, `in-out-cubic`, `out-quint`.
@@ -126,14 +175,14 @@ Opening the overview zooms back out to show the whole image.
 ## Errors
 
 Unknown keys are rejected rather than ignored, with the line and the accepted names.
-Out-of-range values are reported with their full key path, including the output table:
+Out-of-range values are reported with their full key path:
 
 ```
-config.toml: output."DP-1".blur.radius: expected an integer in 0..=512
+parra: config.toml: scroll.vertical.duration-ms: expected at most 60000 ms
 ```
 
 ## What is not configurable
 
-Rendering device, driver vendor, buffer allocation, log level and socket locations are
+Rendering device, driver vendor, buffer allocation, log level and every file location are
 all controlled by mechanisms that already exist, so there is no key for any of them. See
 [environment.md](environment.md).

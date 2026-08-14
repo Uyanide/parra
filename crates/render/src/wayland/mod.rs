@@ -5,7 +5,7 @@ mod surface;
 use std::collections::HashMap;
 use std::os::fd::{AsFd, BorrowedFd};
 
-use domain::{LogicalSize, OutputId, Scale, SurfaceParams};
+use domain::{OutputId, SurfaceParams};
 use wayland_client::backend::WaylandError;
 use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::wl_output::WlOutput;
@@ -13,27 +13,9 @@ use wayland_client::{Connection, EventQueue, QueueHandle};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
 
 use crate::error::RenderError;
+use crate::event::RenderEvent;
 use globals::Globals;
 pub use surface::{Pass, Surface};
-
-/// What the display side tells the daemon. Everything else stays inside this crate.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RenderEvent {
-    /// A monitor appeared, or its geometry changed. Carries the current values, so the
-    /// daemon never has to ask.
-    OutputReady {
-        id: OutputId,
-        logical: LogicalSize,
-        scale: Scale,
-    },
-    OutputGone {
-        id: OutputId,
-    },
-    /// The compositor is ready for another frame on this output.
-    FrameDue {
-        id: OutputId,
-    },
-}
 
 pub struct Wayland {
     connection: Connection,

@@ -2,8 +2,8 @@ use crate::anim::{Animated, Motion};
 
 /// How blurred an output currently is.
 ///
-/// Only the mix factor is state. Radius, tint and downscale describe how the blur was
-/// baked, so they stay in the resolved parameters.
+/// Only the mix factor is state. Whatever describes how the blur was baked is a
+/// parameter, since it does not change between frames.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BlurState {
     /// 0 samples the sharp texture, 1 the baked blurred one. Also scales the tint.

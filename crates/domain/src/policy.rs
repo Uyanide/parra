@@ -35,11 +35,12 @@ impl Index {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct OutputFacts {
     pub workspace: Index,
-    /// Position in the scrolling layout, which drives the horizontal axis.
+    /// Position in the scrolling layout.
     pub column: Index,
 }
 
-/// The compositor's view of the world, normalized across backends.
+// TODO: This is exclusively niri-shaped and NOT normalized across backends.
+/// The compositor's view of the world.
 #[derive(Clone, Debug, Default)]
 pub struct Facts {
     /// Output holding the focused window, if any. Focus is global, so at most one.
@@ -58,8 +59,7 @@ impl Facts {
     }
 }
 
-/// Requests arriving over the control socket, from whatever else is on screen. The
-/// daemon cannot observe those things itself.
+/// Overrides asked for from outside, which the daemon has no way to observe for itself.
 #[derive(Clone, Debug, Default)]
 pub struct Signals {
     global_blur: bool,
@@ -87,18 +87,25 @@ impl Signals {
         self.global_blur || self.per_output_blur.get(id).copied().unwrap_or(false)
     }
 
-    /// Same addressing as the blur signal. Remembered rather than only pushed at the
-    /// monitors that exist, so one that is unplugged and plugged back in returns to what
-    /// was asked for instead of to what the config file says.
-    pub fn set_wallpaper(&mut self, output: Option<OutputId>, wallpaper: WallpaperRef) {
+    /// Same addressing as the blur signal. Kept for outputs that do not exist yet, so one
+    /// that comes back returns to what was asked for rather than to the fallback.
+    ///
+    /// `None` for the wallpaper empties the slot instead of filling it, which is not "show
+    /// nothing": an emptied entry falls through to the next one [`wallpaper_for`] tries.
+    pub fn set_wallpaper(&mut self, output: Option<OutputId>, wallpaper: Option<WallpaperRef>) {
         match output {
             None => {
-                self.global_wallpaper = Some(wallpaper);
+                self.global_wallpaper = wallpaper;
                 self.per_output_wallpaper.clear();
             }
-            Some(id) => {
-                self.per_output_wallpaper.insert(id, wallpaper);
-            }
+            Some(id) => match wallpaper {
+                Some(wallpaper) => {
+                    self.per_output_wallpaper.insert(id, wallpaper);
+                }
+                None => {
+                    self.per_output_wallpaper.remove(&id);
+                }
+            },
         }
     }
 
@@ -106,17 +113,18 @@ impl Signals {
         self.per_output_wallpaper.get(id).or(self.global_wallpaper.as_ref())
     }
 
-    /// Forgets every wallpaper set this way. For when the configuration file has taken the
-    /// slot back, so that what a returning monitor gets is the newest instruction rather
-    /// than the oldest one still on record.
-    pub fn forget_wallpapers(&mut self) {
-        self.global_wallpaper = None;
-        self.per_output_wallpaper.clear();
+    /// Forgets one wallpaper wherever it was asked for, so that resolving an output again
+    /// cannot put it straight back.
+    pub fn forget_wallpaper(&mut self, wallpaper: &WallpaperRef) {
+        if self.global_wallpaper.as_ref() == Some(wallpaper) {
+            self.global_wallpaper = None;
+        }
+        self.per_output_wallpaper.retain(|_, asked| asked != wallpaper);
     }
 }
 
-/// Values the animation layer eases toward. Everything is normalized to `0..=1` except
-/// the zoom factor, which is a multiplier.
+/// Where every animated property should be heading. Everything is normalized to `0..=1`
+/// except the zoom factor, which is a multiplier.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Targets {
     pub scroll_v: f32,
@@ -125,10 +133,12 @@ pub struct Targets {
     pub zoom: f32,
 }
 
+// TODO: Refactor into a more flexible system that does not hardcode the bindings between
+//       facts, signals and params.
 /// The one place where facts, external signals and configuration become intent.
 ///
-/// It lives here because blur depends on a compositor fact and a control-socket signal
-/// at once, so neither of those crates could resolve it alone.
+/// It lives here because some targets, blur among them, combine signals from several
+/// crates at once, so none of those crates could resolve them alone.
 pub fn resolve(
     output: &OutputId,
     facts: &Facts,
@@ -144,6 +154,20 @@ pub fn resolve(
         blur: if blur_on { 1.0 } else { 0.0 },
         zoom: if facts.overview_active { 1.0 } else { params.overview.zoom() },
     }
+}
+
+/// The wallpaper an output should show: whatever was set for it, otherwise the configured
+/// fallback, otherwise nothing.
+///
+/// Stated once and here, beside the other place a signal is weighed against the
+/// configuration, because a monitor appearing, a reload and a decode failure all have to
+/// answer the same question the same way.
+pub fn wallpaper_for<'a>(
+    signals: &'a Signals,
+    output: &OutputId,
+    params: &'a OutputParams,
+) -> Option<&'a WallpaperRef> {
+    signals.wallpaper(output).or(params.fallback.as_ref())
 }
 
 /// Scales the excursion about the centre rather than the raw progress, so a strength
@@ -265,7 +289,7 @@ mod tests {
     #[test]
     fn a_wallpaper_set_for_one_output_leaves_the_others_alone() {
         let mut signals = Signals::default();
-        signals.set_wallpaper(Some(output("DP-1")), WallpaperRef::new("/tmp/one.png"));
+        signals.set_wallpaper(Some(output("DP-1")), Some(WallpaperRef::new("/tmp/one.png")));
 
         assert_eq!(
             signals.wallpaper(&output("DP-1")).map(WallpaperRef::path),
@@ -277,8 +301,8 @@ mod tests {
     #[test]
     fn a_broadcast_wallpaper_replaces_the_ones_set_singly() {
         let mut signals = Signals::default();
-        signals.set_wallpaper(Some(output("DP-1")), WallpaperRef::new("/tmp/one.png"));
-        signals.set_wallpaper(None, WallpaperRef::new("/tmp/all.png"));
+        signals.set_wallpaper(Some(output("DP-1")), Some(WallpaperRef::new("/tmp/one.png")));
+        signals.set_wallpaper(None, Some(WallpaperRef::new("/tmp/all.png")));
 
         assert_eq!(
             signals.wallpaper(&output("DP-1")).map(WallpaperRef::path),
@@ -288,6 +312,99 @@ mod tests {
             signals.wallpaper(&output("eDP-1")).map(WallpaperRef::path),
             Some("/tmp/all.png".as_ref())
         );
+    }
+
+    #[test]
+    fn a_set_wallpaper_wins_over_the_configured_fallback() {
+        let params = OutputParams {
+            fallback: Some(WallpaperRef::new("/tmp/fallback.png")),
+            ..OutputParams::default()
+        };
+        let mut signals = Signals::default();
+        assert_eq!(
+            wallpaper_for(&signals, &output("DP-1"), &params).map(WallpaperRef::path),
+            Some("/tmp/fallback.png".as_ref())
+        );
+
+        signals.set_wallpaper(None, Some(WallpaperRef::at("/tmp/set.png", 1)));
+        assert_eq!(
+            wallpaper_for(&signals, &output("DP-1"), &params).map(WallpaperRef::path),
+            Some("/tmp/set.png".as_ref())
+        );
+    }
+
+    #[test]
+    fn without_a_signal_or_a_fallback_an_output_shows_nothing() {
+        let signals = Signals::default();
+        let params = OutputParams::default();
+        assert_eq!(wallpaper_for(&signals, &output("DP-1"), &params), None);
+    }
+
+    #[test]
+    fn clearing_one_output_leaves_it_on_the_broadcast_one() {
+        let all = WallpaperRef::at("/tmp/all.png", 1);
+        let mut signals = Signals::default();
+        signals.set_wallpaper(None, Some(all.clone()));
+        signals.set_wallpaper(Some(output("DP-1")), Some(WallpaperRef::at("/tmp/one.png", 2)));
+
+        signals.set_wallpaper(Some(output("DP-1")), None);
+
+        assert_eq!(signals.wallpaper(&output("DP-1")), Some(&all), "not nothing: the global one");
+        assert_eq!(signals.wallpaper(&output("eDP-1")), Some(&all));
+    }
+
+    #[test]
+    fn clearing_one_output_that_has_no_entry_changes_nothing() {
+        let all = WallpaperRef::at("/tmp/all.png", 1);
+        let mut signals = Signals::default();
+        signals.set_wallpaper(None, Some(all.clone()));
+
+        signals.set_wallpaper(Some(output("DP-1")), None);
+
+        assert_eq!(signals.wallpaper(&output("DP-1")), Some(&all));
+    }
+
+    #[test]
+    fn clearing_the_broadcast_slot_clears_the_per_output_ones_too() {
+        let mut signals = Signals::default();
+        signals.set_wallpaper(None, Some(WallpaperRef::at("/tmp/all.png", 1)));
+        signals.set_wallpaper(Some(output("DP-1")), Some(WallpaperRef::at("/tmp/one.png", 2)));
+
+        signals.set_wallpaper(None, None);
+
+        assert_eq!(signals.wallpaper(&output("DP-1")), None);
+        assert_eq!(signals.wallpaper(&output("eDP-1")), None);
+    }
+
+    #[test]
+    fn a_cleared_output_falls_all_the_way_to_the_configured_fallback() {
+        let params = OutputParams {
+            fallback: Some(WallpaperRef::new("/tmp/fallback.png")),
+            ..OutputParams::default()
+        };
+        let mut signals = Signals::default();
+        signals.set_wallpaper(Some(output("DP-1")), Some(WallpaperRef::at("/tmp/one.png", 1)));
+        signals.set_wallpaper(Some(output("DP-1")), None);
+
+        assert_eq!(
+            wallpaper_for(&signals, &output("DP-1"), &params).map(WallpaperRef::path),
+            Some("/tmp/fallback.png".as_ref())
+        );
+    }
+
+    #[test]
+    fn forgetting_a_wallpaper_clears_it_everywhere_it_was_asked_for() {
+        let doomed = WallpaperRef::at("/tmp/gone.png", 1);
+        let kept = WallpaperRef::at("/tmp/here.png", 2);
+        let mut signals = Signals::default();
+        signals.set_wallpaper(None, Some(doomed.clone()));
+        signals.set_wallpaper(Some(output("DP-1")), Some(doomed.clone()));
+        signals.set_wallpaper(Some(output("eDP-1")), Some(kept.clone()));
+
+        signals.forget_wallpaper(&doomed);
+
+        assert_eq!(signals.wallpaper(&output("DP-1")), None);
+        assert_eq!(signals.wallpaper(&output("eDP-1")), Some(&kept));
     }
 
     #[test]

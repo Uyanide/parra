@@ -14,10 +14,13 @@
 layer = "background"
 
 [wallpaper]
-# Absolute, or `~`-prefixed, or relative to this file's directory.
-# Leave unset to start blank and set one over the control socket
-# after the daemon is started.
-#path = "~/pictures/wall.png"
+# What to show when nothing has been set over the control socket. Absolute, or
+# `~`-prefixed, or relative to this file's directory.
+#
+# A wallpaper set with `parra set` is remembered across restarts and takes
+# precedence over this, so leaving it unset means the first start is blank and
+# every later one shows whatever was chosen last.
+#fallback = "~/pictures/wall.png"
 
 # Vertical parallax, following the active workspace.
 [scroll.vertical]
@@ -77,4 +80,4 @@ easing = "in-out-cubic"
 # scroll.vertical.travel = 0.5
 #
 # [output."eDP-1"]
-# wallpaper.path = "~/pictures/other.png"
+# wallpaper.fallback = "~/pictures/other.png"

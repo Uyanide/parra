@@ -3,8 +3,8 @@ use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// Straight (non-premultiplied) RGBA with components in `0..=1`, ready for a shader
-/// uniform. Hex parsing and formatting live here so the text form has one definition.
+/// Straight (non-premultiplied) RGBA with components in `0..=1`. Hex parsing and
+/// formatting live here so the text form has one definition.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rgba {
     pub r: f32,

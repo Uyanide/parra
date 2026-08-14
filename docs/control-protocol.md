@@ -33,7 +33,7 @@ silently dropped.
 | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `"get-state"`                                           | Every output.                                                                                                                |
 | `{"get-output":{"output":"DP-1"}}`                      | One output.                                                                                                                  |
-| `{"set-wallpaper":{"output":null,"path":"/srv/a.png"}}` | Show an image. `null` addresses every output.                                                                                |
+| `{"set-wallpaper":{"output":null,"path":"/srv/a.png"}}` | Show an image and remember it. A `null` path empties the slot instead; `"save":false` does not remember either. |
 | `{"set-blur":{"output":"DP-1","on":true}}`              | External blur signal. `null` broadcasts, and a broadcast also clears any per-output requests, so it is always authoritative. |
 | `"reload-config"`                                       | Re-read the config file.                                                                                                     |
 | `"ping"`                                                | Liveness, and the protocol version.                                                                                          |
@@ -45,10 +45,31 @@ Decoding happens afterwards, on a thread of its own, so `set` returns in about t
 milliseconds and whatever is on screen stays there until the new image is ready. A file
 that turns out not to be an image is reported in the log, not to the client that asked.
 
-A wallpaper set this way outlives a config reload. Reloading only reclaims the slot if
-the config file's own path actually changed, so an edit elsewhere in the file does not
-undo what something else set. It also outlives the monitor: one that is unplugged and
-plugged back in comes back to what was asked for rather than to what the file says.
+A wallpaper set this way outlives a config reload, outlives the monitor being unplugged
+and plugged back in, and outlives the daemon: it is written to
+`$XDG_STATE_HOME/parra/state.toml` and restored at the next start, from a resized copy
+under `$XDG_CACHE_HOME/parra` so the start does not pay for the decode again.
+`[wallpaper] fallback` in the config file is only what to show when nothing has been set,
+so the two never compete for the slot. See [config.md](config.md#state-and-cache).
+
+`save` defaults to true. `false` shows the image for this session only, leaving the
+recorded one alone, so the next start goes back to it.
+
+Setting the same path twice is not a no-op: every set is a distinct wallpaper, so an
+image edited in place takes effect.
+
+A `null` path empties the addressed slot rather than blanking the screen. What that
+output shows is then resolved again from the top, so clearing one monitor's own wallpaper
+reveals the one every other monitor is on, and clearing that reveals `[wallpaper]
+fallback`. `null` for the output empties every slot at once, per-output ones included,
+since a broadcast is authoritative here as everywhere else. `parra unset` sends this.
+
+The field is required even though it is nullable. A client whose path came out undefined
+should be told it sent nonsense rather than have a wallpaper quietly cleared.
+
+An image that will not load is reported in the log, that output falls back to
+`[wallpaper] fallback`, and what was recorded is left alone so the next start tries it
+again. A drive that was not mounted yet therefore recovers on its own.
 
 `reload-config` re-reads the file and answers with the parse error if there is one, and
 the daemon keeps running on the configuration it already had. The namespace and layer are
@@ -64,7 +85,7 @@ a temporary file and renames it over the original.
 | Response                      | Meaning                      |
 | ----------------------------- | ---------------------------- |
 | `"done"`                      | The request was carried out. |
-| `{"pong":{"version":2}}`      | Protocol version.            |
+| `{"pong":{"version":4}}`      | Protocol version.            |
 | `{"state":{...}}`             | A `StateSnapshot`.           |
 | `{"output":{...}}`            | One `OutputSnapshot`.        |
 | `{"error":{"message":"..."}}` | The request was refused.     |
@@ -73,11 +94,11 @@ a temporary file and renames it over the original.
 
 ```json
 {
-  "version": 2,
+  "version": 4,
   "namespace": "...",
   "frames": 442,
   "texture_bytes": 56173364,
-  "startup_us": 340107,
+  "startup_us": 139963,
   "outputs": [
     {
       "name": "DP-1",
@@ -139,14 +160,16 @@ A peak several times the typical frame is therefore the normal reading.
 
 ```
 parra daemon [--check]
-parra set PATH [--output NAME]
+parra set PATH [--output NAME] [--no-save]
+parra unset [--output NAME] [--no-save]
 parra blur on|off [--output NAME]
 parra state [--output NAME] [--json]
 parra reload
 parra ping
 ```
 
-`--config PATH` and `--socket PATH` work on any subcommand.
+`--config PATH`, `--socket PATH`, `--state PATH` and `--cache-dir PATH` work on any
+subcommand.
 
 `state --json` prints the reply verbatim, for anything that is not a human. Without it
 you get a readable summary.

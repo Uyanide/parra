@@ -9,8 +9,9 @@ use config::Config;
 use control::{
     GpuSnapshot, Micros, OutputSnapshot, PROTOCOL_VERSION, Request, Response, StateSnapshot,
 };
-use domain::{Facts, MonitorState, OutputId, Signals, WallpaperRef, policy};
-use render::{RenderError, RenderEvent, Renderer};
+use domain::{Facts, MonitorState, OutputId, PixelSize, Signals, WallpaperRef, policy};
+use render::{Cache, RenderError, RenderEvent, Renderer};
+use store::Store;
 use tracing::{debug, info, trace, warn};
 
 pub use loops::run;
@@ -25,6 +26,9 @@ pub struct Daemon {
     states: BTreeMap<OutputId, MonitorState>,
     facts: Facts,
     signals: Signals,
+    /// What the wallpaper half of `signals` is written down as, so it outlives the
+    /// process, plus the resized copies that make the next start cheap.
+    store: Store,
     /// Per output, so two monitors at different refresh rates each advance by their own
     /// elapsed time rather than a shared one.
     clocks: BTreeMap<OutputId, Instant>,
@@ -50,8 +54,9 @@ impl Daemon {
         config_path: PathBuf,
         name: String,
         started: Instant,
+        store: Store,
     ) -> Self {
-        Self {
+        let mut daemon = Self {
             renderer,
             config,
             config_path,
@@ -59,12 +64,80 @@ impl Daemon {
             states: BTreeMap::new(),
             facts: Facts::default(),
             signals: Signals::default(),
+            store,
             clocks: BTreeMap::new(),
             watcher: None,
             started,
             startup_us: None,
             stale: false,
             failure: None,
+        };
+        daemon.restore();
+        daemon
+    }
+
+    /// Puts what the last run was showing back into the signals, before any output exists
+    /// to ask for one.
+    ///
+    /// Nothing else is needed: the signals already mean "remembered rather than only
+    /// pushed at the monitors that exist", which is what makes a wallpaper survive a
+    /// monitor being unplugged. Surviving the process is the same property one level out.
+    fn restore(&mut self) {
+        let restored: Vec<(Option<OutputId>, WallpaperRef)> = self
+            .store
+            .entries()
+            .map(|(output, entry)| (output.cloned(), entry.wallpaper()))
+            .collect();
+
+        for (output, wallpaper) in restored {
+            info!(
+                output = ?output,
+                path = %wallpaper.path().display(),
+                "restoring the wallpaper this was last set to"
+            );
+            self.announce(&wallpaper);
+            self.signals.set_wallpaper(output, Some(wallpaper));
+        }
+    }
+
+    /// Tells the renderer where this wallpaper's resized copy belongs, so a decode either
+    /// reads one or leaves one behind.
+    ///
+    /// Every path that puts a wallpaper on a slot calls this, which is what keeps the
+    /// renderer's view of the cache from drifting away from the store's.
+    fn announce(&mut self, wallpaper: &WallpaperRef) {
+        let cache = self.store.cached(wallpaper).map(|(file, asked)| Cache { file, asked });
+        self.renderer.set_cache(wallpaper, cache);
+    }
+
+    /// Pushes what each output should now be showing.
+    ///
+    /// The single answer to "what should this output show", so a set, a clear, a reload
+    /// and a decode that failed cannot drift apart. Clearing in particular is not "show
+    /// nothing": an output that loses its own wallpaper falls back to the broadcast one
+    /// and then to the config file, which is exactly what `wallpaper_for` walks.
+    ///
+    /// `unusable` names one the loader has just given up on, so an output whose only
+    /// remaining answer is that same file shows nothing rather than asking again.
+    fn resolve_wallpapers(&mut self, unusable: Option<&WallpaperRef>) {
+        let resolved: Vec<(OutputId, Option<WallpaperRef>)> = self
+            .states
+            .iter()
+            .map(|(id, state)| {
+                let next = policy::wallpaper_for(&self.signals, id, &state.params)
+                    .filter(|next| Some(*next) != unusable)
+                    .cloned();
+                (id.clone(), next)
+            })
+            .collect();
+
+        for (id, wallpaper) in resolved {
+            if let Some(wallpaper) = &wallpaper {
+                self.announce(wallpaper);
+            }
+            if let Some(state) = self.states.get_mut(&id) {
+                state.set_wallpaper(wallpaper);
+            }
         }
     }
 
@@ -96,13 +169,14 @@ impl Daemon {
             if std::mem::take(&mut self.stale) {
                 self.resolve();
             }
-            self.renderer.draw(&self.states)?;
+            let drawn = self.renderer.draw(&self.states)?;
             self.note_first_frame();
 
             let queued = self.renderer.dispatch_queued()?;
-            if queued.is_empty() {
+            if drawn.is_empty() && queued.is_empty() {
                 return Ok(());
             }
+            self.consume(drawn);
             self.consume(queued);
         }
     }
@@ -143,6 +217,12 @@ impl Daemon {
                     self.clocks.remove(&id);
                 }
                 RenderEvent::FrameDue { id } => self.tick(&id),
+                RenderEvent::WallpaperStored { wallpaper, asked } => {
+                    self.on_wallpaper_stored(&wallpaper, asked);
+                }
+                RenderEvent::WallpaperFailed { wallpaper } => {
+                    self.on_wallpaper_failed(&wallpaper);
+                }
             }
         }
     }
@@ -151,15 +231,49 @@ impl Daemon {
     /// coming into existence should not look like a transition.
     fn add_output(&mut self, id: OutputId, logical: domain::LogicalSize, scale: domain::Scale) {
         info!(output = %id, width = logical.w, height = logical.h, %scale, "output ready");
-        let mut state = MonitorState::new(id.clone(), self.config.for_output(&id).clone());
+        let params = self.config.for_output(&id).clone();
+        let wallpaper = policy::wallpaper_for(&self.signals, &id, &params).cloned();
+        if let Some(wallpaper) = &wallpaper {
+            self.announce(wallpaper);
+        }
+
+        let mut state = MonitorState::new(id.clone(), params, wallpaper);
         state.logical = logical;
         state.scale = scale;
-        if let Some(wallpaper) = self.signals.wallpaper(&id) {
-            state.set_wallpaper(Some(wallpaper.clone()));
-        }
         state.snap(&policy::resolve(&id, &self.facts, &self.signals, &state.params));
         self.clocks.insert(id.clone(), Instant::now());
         self.states.insert(id, state);
+    }
+
+    /// Records that a resized copy now exists, so the next start reads it instead of
+    /// decoding the original again.
+    fn on_wallpaper_stored(&mut self, wallpaper: &WallpaperRef, asked: PixelSize) {
+        if !self.store.stored(wallpaper, asked) {
+            return;
+        }
+        self.announce(wallpaper);
+        if let Err(error) = self.store.save() {
+            warn!(error = %describe(error), "cannot record the cached wallpaper");
+        }
+    }
+
+    /// Falls back for every output that was waiting on a wallpaper which will not load.
+    ///
+    /// The signal is dropped, or the next reload would resolve the same unusable path
+    /// straight back onto the slot and find the loader has already given up on it. What
+    /// is written down is deliberately left alone: this start shows the fallback, and the
+    /// next one tries again, which is the point of remembering a choice rather than a
+    /// file that happened to be readable.
+    fn on_wallpaper_failed(&mut self, wallpaper: &WallpaperRef) {
+        warn!(
+            path = %wallpaper.path().display(),
+            "falling back for now, and trying this again on the next start"
+        );
+        self.signals.forget_wallpaper(wallpaper);
+        // The configured fallback may be the very thing that just failed, which is why
+        // this is not simply a re-resolve: showing nothing is the honest answer there,
+        // and is also what stops it repeating.
+        self.resolve_wallpapers(Some(wallpaper));
     }
 
     /// Advances one output by the time actually elapsed since it was last drawn.
@@ -217,7 +331,9 @@ impl Daemon {
                 Some(state) => Response::Output(self.snapshot(state)),
                 None => unknown_output(&output),
             },
-            Request::SetWallpaper { output, path } => self.on_set_wallpaper(output, path),
+            Request::SetWallpaper { output, path, save } => {
+                self.on_set_wallpaper(output, path, save)
+            }
             Request::SetBlur { output, on } => {
                 if let Some(id) = &output
                     && !self.states.contains_key(id)
@@ -246,7 +362,20 @@ impl Daemon {
         OutputSnapshot::new(state, &self.facts, gpu)
     }
 
-    fn on_set_wallpaper(&mut self, output: Option<OutputId>, path: PathBuf) -> Response {
+    /// Every set is a new wallpaper, even one naming the path already on screen.
+    ///
+    /// That is the epoch's doing rather than a comparison here: it makes the identity
+    /// different, so the slot, the texture cache and the loader all reload without being
+    /// told to. An image edited in place therefore takes effect too.
+    ///
+    /// No path empties the slot instead. What that output then shows is resolved rather
+    /// than blanked, so removing an override reveals the broadcast wallpaper underneath.
+    fn on_set_wallpaper(
+        &mut self,
+        output: Option<OutputId>,
+        path: Option<PathBuf>,
+        save: bool,
+    ) -> Response {
         if let Some(id) = &output
             && !self.states.contains_key(id)
         {
@@ -254,18 +383,33 @@ impl Daemon {
         }
         // Checked while the client is still on the line. Decoding happens later and off
         // this thread, where a missing path could only be reported to the log.
-        if !path.is_file() {
+        if let Some(path) = &path
+            && !path.is_file()
+        {
             return Response::Error { message: format!("{} is not a file", path.display()) };
         }
 
-        info!(output = ?output, path = %path.display(), "setting wallpaper");
-        let wallpaper = WallpaperRef::new(path);
-        self.signals.set_wallpaper(output.clone(), wallpaper.clone());
-        for (id, state) in &mut self.states {
-            if output.as_ref().is_none_or(|wanted| wanted == id) {
-                state.set_wallpaper(Some(wallpaper.clone()));
+        info!(output = ?output, path = ?path, save, "setting wallpaper");
+        let wallpaper = match path {
+            Some(path) if save => Some(self.store.set(output.as_ref(), path)),
+            Some(path) => Some(self.store.transient(path)),
+            None => {
+                if save {
+                    self.store.clear(output.as_ref());
+                }
+                None
             }
+        };
+
+        // Written before the decode, referring to a copy that does not exist yet: a crash
+        // in between leaves an entry with no size recorded, which is regenerated from the
+        // original rather than trusted. The same call sweeps whatever it stopped naming.
+        if save && let Err(error) = self.store.save() {
+            warn!(error = %describe(error), "cannot remember this wallpaper");
         }
+
+        self.signals.set_wallpaper(output, wallpaper);
+        self.resolve_wallpapers(None);
         Response::Done
     }
 
@@ -300,13 +444,17 @@ impl Daemon {
         info!(path = %self.config_path.display(), "configuration reloaded");
         self.config = next;
 
-        let mut reclaimed = false;
-        for (id, state) in &mut self.states {
-            reclaimed |= state.apply_params(self.config.for_output(id).clone());
+        let ids: Vec<OutputId> = self.states.keys().cloned().collect();
+        for id in ids {
+            let params = self.config.for_output(&id).clone();
+            if let Some(state) = self.states.get_mut(&id) {
+                state.apply_params(params);
+            }
         }
-        if reclaimed {
-            self.signals.forget_wallpapers();
-        }
+        // After the params, since that is where the edited fallback arrives. It reaches
+        // only the outputs actually showing one: what was set over the socket owns its
+        // slot, and the file no longer competes for it.
+        self.resolve_wallpapers(None);
 
         self.stale = true;
         Ok(())

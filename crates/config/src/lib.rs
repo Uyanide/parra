@@ -1,4 +1,4 @@
-//! The TOML surface and the single place where it becomes `domain` parameters.
+//! The config.toml surface.
 //!
 //! The fallback layer-shell namespace arrives as a parameter, so the program's name has
 //! no second definition point here.

@@ -39,7 +39,8 @@ pub struct GeneralSection {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct WallpaperSection {
-    pub path: Option<String>,
+    /// What to show when the control socket has not asked for anything.
+    pub fallback: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]

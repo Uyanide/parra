@@ -3,8 +3,10 @@
 //! Which GPU this runs on is never asked: device selection belongs to the EGL
 //! implementation and the compositor's dmabuf feedback. See `docs/environment.md`.
 
+mod cache;
 mod decode;
 mod error;
+mod event;
 mod gl;
 mod loader;
 mod textures;
@@ -17,9 +19,10 @@ use domain::{MonitorState, OutputId, PixelSize, SurfaceParams, WallpaperRef};
 use glow::HasContext;
 use tracing::debug;
 
+pub use cache::Cache;
 pub use error::RenderError;
+pub use event::RenderEvent;
 pub use gl::FrameCost;
-pub use wayland::RenderEvent;
 
 use gl::{Composite, Frame, Gl, Kawase, Target};
 use loader::Loader;
@@ -86,6 +89,13 @@ impl Renderer {
         self.loader.clear_signal();
     }
 
+    /// Says where this wallpaper's resized copy belongs, and how large the one already
+    /// there was asked for. `None` means nothing is remembering it, so it decodes from
+    /// its source and leaves nothing behind.
+    pub fn set_cache(&mut self, wallpaper: &WallpaperRef, cache: Option<Cache>) {
+        self.loader.set_cache(wallpaper, cache);
+    }
+
     /// Reads the connection and returns what the daemon must react to.
     pub fn dispatch(&mut self) -> Result<Vec<RenderEvent>, RenderError> {
         let events = self.wayland.dispatch()?;
@@ -138,13 +148,20 @@ impl Renderer {
         self.wayland.surfaces().filter(|surface| surface.is_drawable()).map(|surface| &surface.id)
     }
 
-    /// Draws every output that needs it.
+    /// Draws every output that needs it, and reports what the decode thread finished.
     ///
     /// An output is drawn when something changed outside the animation, or while its
     /// animation is still running. With everything settled this submits nothing at all,
     /// which is what makes an idle daemon free.
-    pub fn draw(&mut self, states: &BTreeMap<OutputId, MonitorState>) -> Result<(), RenderError> {
-        self.sync_textures(states)?;
+    ///
+    /// The events come back rather than joining the queue `dispatch_queued` drains,
+    /// because they are not queued on the Wayland connection and pretending otherwise
+    /// would make that method's meaning depend on who called it.
+    pub fn draw(
+        &mut self,
+        states: &BTreeMap<OutputId, MonitorState>,
+    ) -> Result<Vec<RenderEvent>, RenderError> {
+        let decoded = self.sync_textures(states)?;
 
         // After `sync_textures`, which is what leaves a context current. The query
         // objects belong to the context rather than to a surface, so any binding will do.
@@ -171,7 +188,8 @@ impl Renderer {
             let Some(state) = states.get(&id) else { continue };
             self.draw_output(&id, state)?;
         }
-        self.flush()
+        self.flush()?;
+        Ok(decoded)
     }
 
     /// Takes in what the outputs are about to need and releases what they no longer show.
@@ -181,17 +199,38 @@ impl Renderer {
     fn sync_textures(
         &mut self,
         states: &BTreeMap<OutputId, MonitorState>,
-    ) -> Result<(), RenderError> {
+    ) -> Result<Vec<RenderEvent>, RenderError> {
         self.gl.make_current_offscreen()?;
-        for loaded in self.loader.collect() {
+        let (ready, lost) = self.loader.collect();
+        let mut events: Vec<RenderEvent> = lost
+            .into_iter()
+            .map(|failed| RenderEvent::WallpaperFailed { wallpaper: failed.wallpaper })
+            .collect();
+        for loaded in ready {
+            if loaded.stored {
+                let wallpaper = loaded.wallpaper.clone();
+                events.push(RenderEvent::WallpaperStored { wallpaper, asked: loaded.asked });
+            }
             self.textures.accept(&self.gl.api, loaded)?;
         }
 
+        // The outgoing slot counts: during a crossfade it is still on screen, and leaving
+        // it out would free its texture on the first frame of the fade.
         let mut wanted: HashMap<&WallpaperRef, PixelSize> = HashMap::new();
         for state in states.values() {
-            let Some(wallpaper) = state.wallpaper.current() else { continue };
-            let needed = decode::needed_size(state.buffer_size(), state.params.overview.zoom());
-            wanted.entry(wallpaper).and_modify(|size| *size = size.union(needed)).or_insert(needed);
+            let needed = decode::needed_size(
+                state.buffer_size(),
+                state.params.overview.zoom(),
+                self.gl.max_texture_size(),
+            );
+            for wallpaper in
+                [state.wallpaper.current(), state.wallpaper.outgoing()].into_iter().flatten()
+            {
+                wanted
+                    .entry(wallpaper)
+                    .and_modify(|size| *size = size.union(needed))
+                    .or_insert(needed);
+            }
         }
 
         for (wallpaper, needed) in &wanted {
@@ -201,7 +240,8 @@ impl Renderer {
         let in_use: HashSet<WallpaperRef> = wanted.keys().map(|w| (*w).clone()).collect();
         self.textures.retain(&self.gl.api, &in_use);
         self.loader.retain(&in_use);
-        self.sync_blurs(states)
+        self.sync_blurs(states)?;
+        Ok(events)
     }
 
     /// Bakes the blurs that are about to be sampled, and keeps them afterwards.

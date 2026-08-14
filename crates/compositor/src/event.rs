@@ -1,7 +1,6 @@
 use domain::{Facts, Index, OutputId};
 
-/// Facts, normalized across compositors. What the wallpaper does about them is decided
-/// in `domain::policy`.
+/// Facts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CompositorEvent {
     /// The full set of outputs the compositor knows about. Only the set is consumed:

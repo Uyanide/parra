@@ -146,9 +146,9 @@ fn apply_wallpaper(
     prefix: &str,
     ctx: &Context<'_>,
 ) -> Result<()> {
-    if let Some(raw) = &section.path {
-        let key = format!("{prefix}wallpaper.path");
-        params.wallpaper = Some(WallpaperRef::new(resolve_path(raw, ctx, &key)?));
+    if let Some(raw) = &section.fallback {
+        let key = format!("{prefix}wallpaper.fallback");
+        params.fallback = Some(WallpaperRef::new(resolve_path(raw, ctx, &key)?));
     }
     Ok(())
 }
@@ -314,7 +314,7 @@ mod tests {
     }
 
     fn wallpaper_of(config: &Config, output: &OutputId) -> Option<PathBuf> {
-        config.for_output(output).wallpaper.as_ref().map(|w| w.path().to_path_buf())
+        config.for_output(output).fallback.as_ref().map(|w| w.path().to_path_buf())
     }
 
     #[test]
@@ -465,9 +465,9 @@ mod tests {
         let config = parse(
             r#"
             [wallpaper]
-            path = "/srv/shared.png"
+            fallback = "/srv/shared.png"
             [output."eDP-1"]
-            wallpaper.path = "/srv/laptop.png"
+            wallpaper.fallback = "/srv/laptop.png"
             "#,
         )
         .unwrap();
@@ -481,7 +481,7 @@ mod tests {
 
     #[test]
     fn a_leading_tilde_expands_to_home() {
-        let config = parse("[wallpaper]\npath = \"~/pictures/wall.png\"\n").unwrap();
+        let config = parse("[wallpaper]\nfallback = \"~/pictures/wall.png\"\n").unwrap();
         assert_eq!(
             wallpaper_of(&config, &dp1()),
             Some(PathBuf::from("/home/tester/pictures/wall.png"))
@@ -490,7 +490,7 @@ mod tests {
 
     #[test]
     fn a_relative_path_anchors_to_the_config_directory() {
-        let config = parse("[wallpaper]\npath = \"wall.png\"\n").unwrap();
+        let config = parse("[wallpaper]\nfallback = \"wall.png\"\n").unwrap();
         assert_eq!(
             wallpaper_of(&config, &dp1()),
             Some(PathBuf::from("/etc/xdg/somewhere/wall.png"))
@@ -498,8 +498,8 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_wallpaper_path_is_rejected() {
-        assert_eq!(parse("[wallpaper]\npath = \"\"\n").unwrap_err().key, "wallpaper.path");
+    fn an_empty_wallpaper_fallback_is_rejected() {
+        assert_eq!(parse("[wallpaper]\nfallback = \"\"\n").unwrap_err().key, "wallpaper.fallback");
     }
 
     #[test]
