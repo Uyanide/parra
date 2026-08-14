@@ -122,7 +122,7 @@ pub struct TransitionParams {
 
 impl Default for TransitionParams {
     fn default() -> Self {
-        Self { mode: TransitionMode::None, tween: Tween::new(0.4, Easing::InOutCubic) }
+        Self { mode: TransitionMode::Fade, tween: Tween::new(0.8, Easing::InOutCubic) }
     }
 }
 
@@ -143,9 +143,9 @@ impl TransitionParams {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TransitionMode {
-    #[default]
     None,
-    /// The outgoing wallpaper is kept and faded out rather than dropped at once.
+    /// The outgoing wallpaper is kept and faded out.
+    #[default]
     Fade,
 }
 

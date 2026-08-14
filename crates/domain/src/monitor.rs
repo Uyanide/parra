@@ -186,7 +186,14 @@ mod tests {
 
     #[test]
     fn without_a_transition_the_outgoing_slot_is_never_held() {
-        let mut state = monitor();
+        let params = OutputParams {
+            transition: TransitionParams {
+                mode: TransitionMode::None,
+                ..TransitionParams::default()
+            },
+            ..OutputParams::default()
+        };
+        let mut state = MonitorState::new(OutputId::new("DP-1"), params, None);
         state.set_wallpaper(Some(WallpaperRef::new("/tmp/a.png")));
         state.set_wallpaper(Some(WallpaperRef::new("/tmp/b.png")));
         assert!(state.wallpaper.outgoing().is_none());

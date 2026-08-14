@@ -73,7 +73,11 @@ impl WallpaperSlot {
             self.current = next;
             self.fade.snap(1.0);
         } else {
-            self.outgoing = self.current.take();
+            // Two slots cannot hold three images, so a restart drops one of them. Keeping
+            // whichever is the more visible bounds the discontinuity at half.
+            if self.fade.value() >= 0.5 {
+                self.outgoing = self.current.take();
+            }
             self.current = next;
             self.fade.snap(0.0);
             self.fade.retarget(1.0, tween);
@@ -99,6 +103,18 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
+    use crate::params::TransitionMode;
+
+    fn fade() -> TransitionParams {
+        TransitionParams { mode: TransitionMode::Fade, ..TransitionParams::default() }
+    }
+
+    /// A slot already showing `/tmp/a.png`, with no transition behind it.
+    fn showing_a() -> WallpaperSlot {
+        let mut slot = WallpaperSlot::new();
+        slot.set(Some(WallpaperRef::new("/tmp/a.png")), &TransitionParams::INSTANT);
+        slot
+    }
 
     #[test]
     fn one_path_at_two_epochs_is_two_wallpapers() {
@@ -116,5 +132,36 @@ mod tests {
         let mut slot = WallpaperSlot::new();
         assert!(slot.set(Some(WallpaperRef::at("/tmp/a.png", 1)), &TransitionParams::INSTANT));
         assert!(slot.set(Some(WallpaperRef::at("/tmp/a.png", 2)), &TransitionParams::INSTANT));
+    }
+
+    #[test]
+    fn a_restart_early_in_a_fade_keeps_the_image_still_on_screen() {
+        let mut slot = showing_a();
+        slot.set(Some(WallpaperRef::new("/tmp/b.png")), &fade());
+        slot.set(Some(WallpaperRef::new("/tmp/c.png")), &fade());
+
+        assert_eq!(slot.outgoing(), Some(&WallpaperRef::new("/tmp/a.png")));
+        assert_eq!(slot.current(), Some(&WallpaperRef::new("/tmp/c.png")));
+    }
+
+    #[test]
+    fn a_restart_late_in_a_fade_keeps_the_image_that_replaced_it() {
+        let mut slot = showing_a();
+        slot.set(Some(WallpaperRef::new("/tmp/b.png")), &fade());
+        slot.tick(fade().tween.duration * 0.75);
+        slot.set(Some(WallpaperRef::new("/tmp/c.png")), &fade());
+
+        assert_eq!(slot.outgoing(), Some(&WallpaperRef::new("/tmp/b.png")));
+        assert_eq!(slot.current(), Some(&WallpaperRef::new("/tmp/c.png")));
+    }
+
+    #[test]
+    fn a_fade_lands_exactly_on_the_incoming_wallpaper() {
+        let mut slot = showing_a();
+        slot.set(Some(WallpaperRef::new("/tmp/b.png")), &fade());
+        assert_eq!(slot.tick(fade().tween.duration), Motion::Settled);
+
+        assert_eq!(slot.fade(), 1.0, "any residue would leave the outgoing image visible");
+        assert!(slot.outgoing().is_none());
     }
 }

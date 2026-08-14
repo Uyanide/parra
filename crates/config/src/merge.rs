@@ -545,9 +545,10 @@ mod tests {
     }
 
     #[test]
-    fn the_transition_mode_parses_even_though_it_is_not_implemented() {
-        let config = parse("[transition]\nmode = \"fade\"\nduration-ms = 800\n").unwrap();
-        assert_eq!(config.global.transition.mode, TransitionMode::Fade);
-        assert_eq!(config.global.transition.tween.duration, 0.8);
+    fn a_transition_carries_both_its_mode_and_its_duration() {
+        // Neither value is the default, or dropping the override would still pass.
+        let config = parse("[transition]\nmode = \"none\"\nduration-ms = 250\n").unwrap();
+        assert_eq!(config.global.transition.mode, TransitionMode::None);
+        assert_eq!(config.global.transition.tween.duration, 0.25);
     }
 }

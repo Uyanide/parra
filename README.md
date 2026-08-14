@@ -39,8 +39,8 @@ sudo install -Dm755 -t /usr/local/bin target/release/parra
 
 common:
 
-- [Usage](docs/usage.md) - compositor integration and instructions for normal usage
-- [Configuration](docs/config.md) — every key, and how per-output overrides inherit
+- [Usage](docs/usage.md) — compositor integration and instructions for normal usage
+- [Configuration](docs/config.md) — every key, defaults, per-monitor inheritance
 - [Control protocol](docs/control-protocol.md) — the socket, the CLI, exit codes
 - [Environment](docs/environment.md) — GPU selection, logging, where files go, and what is
   deliberately not configurable

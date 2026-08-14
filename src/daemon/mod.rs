@@ -3,7 +3,7 @@ mod loops;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use config::Config;
 use control::{
@@ -21,13 +21,11 @@ pub struct Daemon {
     renderer: Renderer,
     config: Config,
     config_path: PathBuf,
-    /// Passed to `config::load` as the fallback layer-shell namespace.
+    /// Fallback layer-shell namespace.
     name: String,
     states: BTreeMap<OutputId, MonitorState>,
     facts: Facts,
     signals: Signals,
-    /// What the wallpaper half of `signals` is written down as, so it outlives the
-    /// process, plus the resized copies that make the next start cheap.
     store: Store,
     /// Per output, so two monitors at different refresh rates each advance by their own
     /// elapsed time rather than a shared one.
@@ -35,8 +33,7 @@ pub struct Daemon {
     /// Watches the configuration file. `None` when its directory could not be watched, in
     /// which case reloading happens only when something asks for it.
     watcher: Option<config::Watcher>,
-    /// When the process began, and how long it took to put something on a screen. The
-    /// second is measured once and kept: it is a fact about this start.
+    /// When the process began, and how long it took to put something on a screen.
     started: Instant,
     startup_us: Option<Micros>,
     /// Set when the facts or signals changed and the targets have not been re-derived
@@ -78,10 +75,6 @@ impl Daemon {
 
     /// Puts what the last run was showing back into the signals, before any output exists
     /// to ask for one.
-    ///
-    /// Nothing else is needed: the signals already mean "remembered rather than only
-    /// pushed at the monitors that exist", which is what makes a wallpaper survive a
-    /// monitor being unplugged. Surviving the process is the same property one level out.
     fn restore(&mut self) {
         let restored: Vec<(Option<OutputId>, WallpaperRef)> = self
             .store
@@ -131,12 +124,17 @@ impl Daemon {
             })
             .collect();
 
+        // A transition starts now, so the clock carrying it does too. One left at the
+        // last frame drawn would spend the whole idle period on the first step.
+        let now = Instant::now();
         for (id, wallpaper) in resolved {
             if let Some(wallpaper) = &wallpaper {
                 self.announce(wallpaper);
             }
-            if let Some(state) = self.states.get_mut(&id) {
-                state.set_wallpaper(wallpaper);
+            if let Some(state) = self.states.get_mut(&id)
+                && state.set_wallpaper(wallpaper)
+            {
+                self.clocks.insert(id, now);
             }
         }
     }
@@ -276,13 +274,14 @@ impl Daemon {
         self.resolve_wallpapers(Some(wallpaper));
     }
 
-    /// Advances one output by the time actually elapsed since it was last drawn.
+    /// Advances one output by the time since it was last drawn.
     fn tick(&mut self, id: &OutputId) {
         let now = Instant::now();
         let previous = self.clocks.insert(id.clone(), now).unwrap_or(now);
-        trace!(output = %id, dt = ?now.duration_since(previous), "frame due");
+        let dt = step(previous, now);
+        trace!(output = %id, dt, "frame due");
         if let Some(state) = self.states.get_mut(id) {
-            state.tick(now.duration_since(previous).as_secs_f32());
+            state.tick(dt);
         }
     }
 
@@ -465,8 +464,38 @@ fn unknown_output(id: &OutputId) -> Response {
     Response::Error { message: format!("no output named {id}") }
 }
 
+/// Longest an animation advances in one step. Comfortably above any real refresh
+/// interval, so a frame that arrives on time is never shortened.
+const MAX_STEP: Duration = Duration::from_millis(100);
+
+/// Time between two frames of one output, bounded by [`MAX_STEP`].
+///
+/// An output submits nothing while it is idle or waiting on a decode, so its clock can be
+/// arbitrarily old, and an unbounded step would spend a whole animation on one frame.
+fn step(previous: Instant, now: Instant) -> f32 {
+    now.duration_since(previous).min(MAX_STEP).as_secs_f32()
+}
+
 /// One line carrying the whole error chain. Only the outermost message would reach a log
 /// line otherwise, and for anything file-related the cause is the half worth reading.
 fn describe(error: impl Into<anyhow::Error>) -> String {
     format!("{:#}", error.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_frame_arriving_on_time_is_not_shortened() {
+        let previous = Instant::now();
+        let dt = step(previous, previous + Duration::from_millis(16));
+        assert!((dt - 0.016).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_stale_clock_cannot_spend_a_whole_animation_on_one_frame() {
+        let previous = Instant::now();
+        assert_eq!(step(previous, previous + Duration::from_secs(60)), MAX_STEP.as_secs_f32());
+    }
 }

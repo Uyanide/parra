@@ -24,7 +24,9 @@ The load-bearing property is what is _absent_: `render/Cargo.toml` does not list
 `compositor`, so the renderer physically cannot learn that niri exists. `compositor`
 cannot reach a rendering API. Neither can see `control`. `render` reaches `store` only to
 write a file atomically, and `store` never learns what an image is. Only the root package
-sees all of them, and it holds no logic of its own.
+sees all of them, and the decisions it makes are the ones that need that view: what starts
+in which order, what happens when a wallpaper will not load, and joining two crates'
+numbers into one answer.
 
 | Crate        | Knows                                                            | Must not know                                                                      |
 | ------------ | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
@@ -34,13 +36,10 @@ sees all of them, and it holds no logic of its own.
 | `config`     | The TOML surface, merge rules, file watching                     | Rendering, compositors, IPC                                                        |
 | `control`    | The request and response wire format, socket plumbing            | How to satisfy a request                                                           |
 | `store`      | What the daemon writes down and where, and writing it atomically | Rendering, compositors, the config file, why a wallpaper was chosen                |
-| root package | How to wire the above together                                   | Anything else; it holds no logic                                                   |
+| root package | Startup order, lifecycle, what only exists once the crates meet  | Anything one crate could decide alone                                              |
 
 `domain` depends only on `serde`. It has no clock: `tick(dt)` is fed elapsed time from
 outside, which is what makes the animation and policy layers testable without a display.
-
-That table is the one place these boundaries are written down. The code states them only
-where breaking one would be an easy mistake to make.
 
 ## Data flow
 
@@ -54,18 +53,6 @@ graph LR
     P --> R
     R --> T["Targets"] --> M["MonitorState.apply, then tick(dt)"] --> D["render"]
 ```
-
-### Where blur is decided, and why not earlier
-
-The obvious layering is: the compositor adapter reports "is focused", derives "should
-blur", and the renderer acts on it. That does not work, because blur also depends on
-whether something else is drawing over the wallpaper, and that signal arrives on the
-control socket. A `compositor` crate that decided blur would have to know about the
-control socket, which is exactly the coupling the split exists to prevent.
-
-So the merge point moved up one level, to `domain::policy`. `compositor` reports facts,
-`control` reports signals, and `policy::resolve` is the single function that turns both
-plus configuration into targets. The layering is no deeper; each layer just does less.
 
 ## Design decisions that carry the performance budget
 
@@ -97,9 +84,6 @@ Gaussian on a live session, two very different chains landed on their prediction
 | 32     | 3 / 2 / 2.68           | 10.67           | 11             |
 | 96     | 4 / 2 / 3.85           | 32.0            | 32             |
 
-An earlier chain that never went deeper than the level it kept predicted 4.22 and measured
-4, which is what established that the upsample kernel had to be counted separately.
-
 **Scrolling is a texture coordinate, not a transform.** `domain::geometry::sample_rect`
 turns image size, viewport size, zoom and scroll position into a UV rectangle. Panning
 moves the rectangle; no pixels move, and nothing is re-uploaded.
@@ -108,8 +92,7 @@ moves the rectangle; no pixels move, and nothing is re-uploaded.
 `Motion::Running`. When every animation settles, the daemon stops submitting. Each
 output schedules itself, so a 60 Hz panel is never dragged along by a 180 Hz one.
 
-Sleeping while idle is the cheap part. Waking up again correctly is where every bug
-lived, and each of the following cost a real stall before it was understood:
+Waking up again correctly takes five rules:
 
 - _Drain before sleeping._ Presenting reads the Wayland connection itself, so a frame
   callback can land in our queue with nothing left on the descriptor for the event loop
@@ -133,9 +116,8 @@ lived, and each of the following cost a real stall before it was understood:
   matters most for an output nobody can see: a fully occluded surface gets very few
   callbacks, and the one it does get must still present the finished state.
 
-Three of those five were wrong at some point in the same boolean expression, so the rule
-now lives in `render::wayland::surface::Pacing` as one `plan` function over three flags,
-where it is tested without a display.
+The rule lives in `render::wayland::surface::Pacing` as one `plan` function over three
+flags, where it is tested without a display.
 
 **The budget is readable while it runs.** A frame is timed on the GPU with
 `EXT_disjoint_timer_query`, and the result is read on a later frame, never on the one that
@@ -146,14 +128,11 @@ through `state`, so checking a budget does not mean stopping the daemon to read 
 
 Measured on the two monitors here, one 14 megapixel wallpaper on both: **142 to 186
 microseconds** a frame, against a millisecond of budget. Sampling a full-resolution blur
-instead of the quarter-scale bake costs 21% more, which is the shader's second fetch
-showing up where it should.
+instead of the quarter-scale bake costs 21% more.
 
-The instrument's first finding was about idling, not about frames. With everything settled
-nothing is submitted, so the GPU drops to its lowest power state -- 240 MHz here, from
-2160 -- and the first frame of the next animation is measured at that clock: **9 to 11
-milliseconds**, then back to 150 microseconds as it ramps. Sleeping properly is what makes
-waking up expensive, and the two budget lines are the same line read from two ends.
+With everything settled nothing is submitted, so the GPU drops to its lowest power state
+-- 240 MHz here, from 2160 -- and the first frame of the next animation is measured at
+that clock: **9 to 11 milliseconds**, then back to 150 microseconds as it ramps.
 
 Cold start was the one budget over its target: first frame at 316 to 361 ms for a
 2937x4796 wallpaper against a 200 ms target, and 188 ms for a 2242x1365 one. About 140 ms
@@ -169,9 +148,7 @@ memcpy-shaped loop rather than an entropy decode plus a Lanczos3 pass.
 The copy is written once per `parra set`, on the decode thread that already holds the
 pixels, so the cost lands where a wallpaper was changing anyway. It is used again for as
 long as it still covers what the outputs need, and re-made from the original when it does
-not -- which is what a rotation, a resolution change, a scale change or a smaller
-`crop-ratio` each amount to. Nothing waits for that: the old copy keeps drawing until the
-new one arrives.
+not. Nothing waits for that: the old copy keeps drawing until the new one arrives.
 
 The configured fallback is not kept this way. It is what shows before anything has ever
 been chosen, and giving it a copy would mean a second thing deciding when a wallpaper's
@@ -207,8 +184,7 @@ a handle into the EGL display and a pointer into a Wayland surface, and `eglTerm
 sends Wayland requests of its own to release what the driver allocated. So: native
 surfaces first, then the EGL display, then the connection. The middle step is why `gl` is
 declared before `wayland` in `Renderer`, fields being dropped in declaration order. Any
-other order segfaults in the driver after the last log line, which is exactly the kind of
-failure nobody sees until something checks an exit status.
+other order segfaults in the driver after the last log line.
 
 ## The two axes
 
@@ -226,8 +202,7 @@ only ever match one of them.
 
 **Both axes are per output, and the horizontal one had to be made so.** Focus is global,
 so reading the column off the focused window answers for one monitor and leaves every
-other one reporting nothing, which `Index::progress` reads as centred. That is the same
-bug the reference QML had on the vertical axis: monitors without the focus never scroll.
+other one reporting nothing, which `Index::progress` reads as centred.
 
 The fix is that the column is remembered per workspace, in `Tracker::workspace_column`,
 updated whenever the focus lands somewhere with a place in the scroll. An output then
@@ -243,11 +218,26 @@ consequences fall out of the same choice:
 A workspace nothing has ever been focused on reports `idx = 0`, and centred is the only
 neutral answer there.
 
-Wallpaper transitions are carried the same way but stop short of the screen: `domain`
-holds a two-slot `WallpaperSlot` with a fade factor, and the composite shader has the
-uniforms for it, but the renderer always draws the current slot alone. With the mode off,
-the outgoing slot is dropped on the same call that sets the new wallpaper, so the second
-slot costs nothing.
+Wallpaper transitions are carried the same way, from the two-slot `WallpaperSlot` in
+`domain` through to `u_mix` in the composite shader. This is on by default, so the second
+slot is normally occupied for the length of a fade and empty the rest of the time; with
+the mode off it is dropped on the same call that sets the new wallpaper and costs nothing
+at all. Either way a monitor appearing snaps, since coming into existence should not look
+like a transition.
+
+The rule the crossfade follows is that blur, zoom and scroll describe the output, not the
+image: a transition replaces the subject while the viewer holds still. So both slots share
+one blur factor and one tint, and each is sampled through its own aspect-corrected rect.
+The outgoing image goes on parallaxing and zooming as it fades, rather than sliding
+against the incoming one.
+
+Two slots cannot hold three images, so a wallpaper set part-way through a fade displaces
+one of them. Whichever is the more visible is kept, bounding the discontinuity at half an
+image.
+
+A frame draws only layers it can sample at that frame's blur level. An outgoing slot whose
+bake is missing therefore leaves the frame and the swap becomes instant, which is quieter
+than crossfading one sharp half against one blurred half.
 
 ## Extension seams
 
@@ -264,8 +254,7 @@ rule would be a second definition point for that rule.
 ## Choosing a wallpaper is not part of this
 
 Pickers, thumbnail caches, palette extraction and rotation are all out of scope and
-deliberately decoupled. A path arrives from the config file or over the control socket;
-what chose it is not this program's concern.
+deliberately decoupled. A path arrives from the config file or over the control socket.
 
 ## Measured footprint
 

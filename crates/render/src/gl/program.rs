@@ -30,8 +30,8 @@ pub struct Frame<'a> {
 
 /// The one program that draws a wallpaper.
 ///
-/// The crossfade uniforms are wired though nothing drives them yet, so enabling a
-/// transition mode does not change this interface.
+/// A crossfade is the same pass with a second pair of textures bound. Both layers share
+/// the blur factor and the tint, which describe the output rather than the image.
 pub struct Composite {
     program: glow::Program,
     vao: glow::VertexArray,

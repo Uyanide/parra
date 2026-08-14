@@ -73,8 +73,7 @@ impl Paths {
     }
 }
 
-/// `$XDG_CONFIG_HOME/<name>/config.toml`, falling back to `$HOME/.config` as the XDG
-/// specification prescribes.
+/// `$XDG_CONFIG_HOME/<name>/config.toml`, falling back to `$HOME/.config`.
 pub fn config_file(name: &str) -> Result<PathBuf, PathError> {
     let base = base_dir("XDG_CONFIG_HOME", ".config").ok_or_else(|| {
         PathError::new("neither XDG_CONFIG_HOME nor HOME is set", "the config file")
@@ -98,7 +97,8 @@ pub fn cache_dir(name: &str) -> Result<PathBuf, PathError> {
     Ok(base.join(name))
 }
 
-/// `$XDG_RUNTIME_DIR/<name>-<display>.sock`.
+/// `$XDG_RUNTIME_DIR/<name>-<display>.sock`. `$XDG_RUNTIME_DIR` must be set,
+/// <display> falls back to [DEFAULT_WAYLAND_DISPLAY].
 pub fn socket_path(name: &str) -> Result<PathBuf, PathError> {
     let dir = env::var_os("XDG_RUNTIME_DIR")
         .filter(|value| !value.is_empty())

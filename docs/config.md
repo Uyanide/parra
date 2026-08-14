@@ -119,11 +119,23 @@ driver reports.
 
 ### `[transition]`
 
-| Key           | Default          | Meaning                                                                                                      |
-| ------------- | ---------------- | ------------------------------------------------------------------------------------------------------------ |
-| `mode`        | `"none"`         | `"none"` or `"fade"`. `fade` parses and animates in the state model, but the renderer still swaps instantly. |
-| `duration-ms` | `400`            |                                                                                                              |
-| `easing`      | `"in-out-cubic"` |                                                                                                              |
+| Key           | Default          | Meaning                                                                       |
+| ------------- | ---------------- | ----------------------------------------------------------------------------- |
+| `mode`        | `"fade"`         | `"fade"` crossfades the outgoing wallpaper into the incoming one. `"none"` swaps outright. |
+| `duration-ms` | `800`            | Longer than the other sections, since replacing the image is a larger event than moving it. |
+| `easing`      | `"in-out-cubic"` |                                                                               |
+
+A fade holds both wallpapers, and both of their blurs, until it finishes. That is about
+19 MB extra on a 2560x1440 output at the default `crop-ratio`, and it scales with the
+same square as the figure above, so it is only worth thinking about alongside a
+`crop-ratio` near its floor. `mode = "none"` gives that memory back and swaps instantly.
+
+The outgoing wallpaper keeps scrolling and blurring along with the incoming one, since
+those describe the output rather than the image. Setting a third wallpaper part-way
+through a fade drops one of the two in flight, which shows as a small jump.
+
+A monitor appearing, whether at startup or when it is plugged in, always snaps. Coming
+into existence should not look like a transition.
 
 ## State and cache
 

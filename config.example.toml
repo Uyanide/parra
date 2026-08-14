@@ -68,9 +68,10 @@ duration-ms = 400
 easing = "out-cubic"
 
 [transition]
-# "fade" parses and animates in the state model, but still swaps instantly on screen.
-mode = "none"
-duration-ms = 400
+# "fade" crossfades the outgoing wallpaper into the incoming one, holding both in
+# video memory until it finishes. "none" swaps outright and costs nothing.
+mode = "fade"
+duration-ms = 800
 easing = "in-out-cubic"
 
 # Per-output overrides, keyed by connector name as the compositor reports it.

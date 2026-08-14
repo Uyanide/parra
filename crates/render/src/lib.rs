@@ -21,7 +21,7 @@ pub use error::RenderError;
 pub use event::RenderEvent;
 pub use gl::FrameCost;
 
-use gl::{Composite, Frame, Gl, Kawase, Target};
+use gl::{Composite, Frame, Gl, Kawase, Target, Texture};
 use loader::Loader;
 use textures::{BlurCache, BlurKey, TextureCache};
 use wayland::{Pass, Wayland};
@@ -211,22 +211,26 @@ impl Renderer {
             self.textures.accept(&self.gl.api, loaded)?;
         }
 
-        // The outgoing slot counts: during a crossfade it is still on screen, and leaving
-        // it out would free its texture on the first frame of the fade.
+        // Only what an output is arriving at is worth decoding larger. What it is leaving
+        // is still held, or its texture would go on the first frame of the crossfade.
         let mut wanted: HashMap<&WallpaperRef, PixelSize> = HashMap::new();
+        let mut in_use: HashSet<WallpaperRef> = HashSet::new();
         for state in states.values() {
             let needed = decode::needed_size(
                 state.buffer_size(),
                 state.params.overview.zoom(),
                 self.gl.max_texture_size(),
             );
-            for wallpaper in
-                [state.wallpaper.current(), state.wallpaper.outgoing()].into_iter().flatten()
-            {
+            if let Some(wallpaper) = state.wallpaper.current() {
                 wanted
                     .entry(wallpaper)
                     .and_modify(|size| *size = size.union(needed))
                     .or_insert(needed);
+            }
+            for wallpaper in
+                [state.wallpaper.current(), state.wallpaper.outgoing()].into_iter().flatten()
+            {
+                in_use.insert(wallpaper.clone());
             }
         }
 
@@ -234,7 +238,6 @@ impl Renderer {
             self.textures.ensure(&mut self.loader, wallpaper, *needed);
         }
 
-        let in_use: HashSet<WallpaperRef> = wanted.keys().map(|w| (*w).clone()).collect();
         self.textures.retain(&self.gl.api, &in_use);
         self.loader.retain(&in_use);
         self.sync_blurs(states)?;
@@ -250,11 +253,15 @@ impl Renderer {
         let mut resident: HashSet<BlurKey> = HashSet::new();
         let mut needed: Vec<BlurKey> = Vec::new();
         for state in states.values() {
-            let Some(key) = blur_key(state) else { continue };
-            if wants_blur(state) && !needed.contains(&key) {
-                needed.push(key.clone());
+            for wallpaper in
+                [state.wallpaper.current(), state.wallpaper.outgoing()].into_iter().flatten()
+            {
+                let Some(key) = blur_key(state, wallpaper) else { continue };
+                if wants_blur(state) && !needed.contains(&key) {
+                    needed.push(key.clone());
+                }
+                resident.insert(key);
             }
-            resident.insert(key);
         }
 
         for key in &needed {
@@ -270,33 +277,50 @@ impl Renderer {
         let buffer = state.buffer_size().max_one();
         self.ensure_target(id, buffer)?;
 
-        let Some(texture) = self.textures.get(wallpaper) else { return Ok(()) };
-        let Some(target) = self.targets.get_mut(id) else { return Ok(()) };
+        let Some((sharp, baked)) = layer(&self.textures, &self.blurs, state, wallpaper) else {
+            return Ok(());
+        };
+
+        // One blur factor covers the whole frame, so a layer that cannot be sampled at it
+        // leaves rather than being drawn at another. That degrades to an instant swap.
+        let outgoing = state
+            .wallpaper
+            .outgoing()
+            .filter(|_| state.wallpaper.fade() < 1.0)
+            .and_then(|previous| layer(&self.textures, &self.blurs, state, previous))
+            .filter(|(_, previous_baked)| previous_baked.is_some() || baked.is_none());
 
         // With no bake to sample, a zero factor makes the shader skip its second fetch,
         // so the sharp texture standing in for it is never read.
-        let (blurred, blur) = match blur_key(state).and_then(|key| self.blurs.get(&key)) {
-            Some(baked) => (baked, state.blur.amount.value()),
-            None => (texture, 0.0),
+        let blur = if baked.is_some() { state.blur.amount.value() } else { 0.0 };
+        let uv = state.sample_rect(sharp.size());
+        let (previous, uv_previous, mix) = match outgoing {
+            Some((previous_sharp, previous_baked)) => (
+                Some((previous_sharp, previous_baked.unwrap_or(previous_sharp))),
+                state.sample_rect(previous_sharp.size()),
+                state.wallpaper.fade(),
+            ),
+            None => (None, uv, 1.0),
         };
 
+        let Some(target) = self.targets.get_mut(id) else { return Ok(()) };
         self.gl.make_current(target)?;
-        let uv = state.sample_rect(texture.size());
         tracing::trace!(
             output = %id,
             scroll = state.scroll.v.value(),
             blur,
+            mix,
             settled = state.is_settled(),
             "presenting"
         );
         let frame = Frame {
-            sharp: texture,
-            blurred,
-            previous: None,
+            sharp,
+            blurred: baked.unwrap_or(sharp),
+            previous,
             uv,
-            uv_previous: uv,
+            uv_previous,
             blur,
-            mix: 1.0,
+            mix,
             tint: state.params.blur.effective_tint(),
         };
         unsafe {
@@ -348,10 +372,21 @@ impl Drop for Renderer {
     }
 }
 
-/// The bake this output is configured for, if it is configured for one at all.
-fn blur_key(state: &MonitorState) -> Option<BlurKey> {
-    let wallpaper = state.wallpaper.current()?;
+/// The bake this wallpaper is given on this output, if it is configured for one at all.
+fn blur_key(state: &MonitorState, wallpaper: &WallpaperRef) -> Option<BlurKey> {
     state.params.blur.is_enabled().then(|| BlurKey::new(wallpaper, &state.params.blur))
+}
+
+/// The textures one wallpaper is drawn from here: the sharp one, and its bake where this
+/// output has one. `None` for a wallpaper that is not resident at all.
+fn layer<'a>(
+    textures: &'a TextureCache,
+    blurs: &'a BlurCache,
+    state: &MonitorState,
+    wallpaper: &WallpaperRef,
+) -> Option<(&'a Texture, Option<&'a Texture>)> {
+    let sharp = textures.get(wallpaper)?;
+    Some((sharp, blur_key(state, wallpaper).and_then(|key| blurs.get(&key))))
 }
 
 /// Whether this output is showing its blur or on the way to it. Baking is deferred until

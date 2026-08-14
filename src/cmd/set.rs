@@ -19,7 +19,7 @@ pub struct Args {
     pub no_save: bool,
 }
 
-/// What `unset` takes: everything `set` does except the image itself.
+/// `unset` takes everything `set` does except the image itself.
 #[derive(clap::Args)]
 pub struct UnsetArgs {
     /// Limit to one output, dropping only its own wallpaper. Omitted, it drops every
@@ -37,9 +37,6 @@ pub fn run(args: &Args, socket: &Path) -> anyhow::Result<()> {
     ask(socket, &args.output, Some(path), args.no_save)
 }
 
-/// Empties a slot rather than filling it. What the output then shows is whatever it would
-/// have shown had nothing been set for it, so removing one monitor's wallpaper reveals the
-/// one every other monitor is on.
 pub fn unset(args: &UnsetArgs, socket: &Path) -> anyhow::Result<()> {
     ask(socket, &args.output, None, args.no_save)
 }
