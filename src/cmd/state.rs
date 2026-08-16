@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use control::{Micros, OutputSnapshot, Request, Response, StateSnapshot, Tween};
+use control::{OutputSnapshot, Request, Response, StateSnapshot, Tween};
 
 use crate::cmd;
 
@@ -68,10 +68,7 @@ fn print_output(output: &OutputSnapshot) {
         output.scale,
         flags.join(" ")
     );
-    println!(
-        "  wallpaper  {}",
-        output.wallpaper.as_ref().map_or("none".to_owned(), |path| path.display().to_string())
-    );
+    println!("  wallpaper  {}", cmd::path_or_none(output.wallpaper.as_deref()));
     println!(
         "  scroll     v {}  h {}",
         tween(output.scroll.vertical),
@@ -90,7 +87,7 @@ fn print_output(output: &OutputSnapshot) {
         output.workspace.index, output.workspace.count, output.column.index, output.column.count
     );
     if let (Some(last), Some(peak)) = (output.gpu.last_us, output.gpu.peak_us) {
-        println!("  gpu        {} per frame, {} at worst", millis(last), millis(peak));
+        println!("  gpu        {} per frame, {} at worst", cmd::millis(last), cmd::millis(peak));
     }
 }
 
@@ -98,13 +95,9 @@ fn print_output(output: &OutputSnapshot) {
 fn print_budget(state: &StateSnapshot) {
     print!("{} frames  {:.1} MB in textures", state.frames, megabytes(state.texture_bytes));
     match state.startup_us {
-        Some(startup) => println!("  {} to the first frame", millis(startup)),
+        Some(startup) => println!("  {} to the first frame", cmd::millis(startup)),
         None => println!("  nothing shown yet"),
     }
-}
-
-fn millis(us: Micros) -> String {
-    format!("{:.2} ms", us as f64 / 1_000.0)
 }
 
 fn megabytes(bytes: u64) -> f64 {

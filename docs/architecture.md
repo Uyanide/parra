@@ -21,12 +21,10 @@ graph TD
 ```
 
 The load-bearing property is what is _absent_: `render/Cargo.toml` does not list
-`compositor`, so the renderer physically cannot learn that niri exists. `compositor`
-cannot reach a rendering API. Neither can see `control`. `render` reaches `store` only to
-write a file atomically, and `store` never learns what an image is. Only the root package
-sees all of them, and the decisions it makes are the ones that need that view: what starts
-in which order, what happens when a wallpaper will not load, and joining two crates'
-numbers into one answer.
+`compositor`, so the renderer physically cannot learn that niri exists. The table below is
+the whole of that rule. Only the root package sees every crate, and the decisions it makes
+are the ones that need that view: what starts in which order, what happens when a
+wallpaper will not load, and joining two crates' numbers into one answer.
 
 | Crate        | Knows                                                            | Must not know                                                                      |
 | ------------ | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
@@ -56,7 +54,7 @@ graph LR
 
 ## Design decisions that carry the performance budget
 
-**Blur is baked, not computed per frame.** The wallpaper is the bottom layer, so there
+**Blur is baked once and interpolated.** The wallpaper is the bottom layer, so there
 is nothing behind it: the blur is a static image effect. It is baked once with
 dual-Kawase when the image or radius changes, at a quarter linear resolution, and
 frames then interpolate between the sharp and blurred textures. A frame costs one
@@ -68,23 +66,22 @@ as long as it is visible: dropping it when an output loses focus would put the c
 into the very interaction it was moved out of. It is not baked at all until an output
 first asks to blur.
 
-`radius` is measured in texels of the wallpaper texture. That texture is decoded at the
-buffer size times the deepest zoom, so at rest one texel is one device pixel and the
-configured number is the blur's extent on screen. Choosing texels over logical pixels is
-what lets one bake serve monitors at different scales.
+`radius` is measured in texels of the wallpaper texture rather than in logical pixels,
+which is what lets one bake serve monitors at different scales. What that means for the
+configured number is in [config.md](config.md#blur).
 
-**The level chain is derived, not tuned.** Taps at level `i` reach `2^(i-1)` source texels
-and independent passes add variance, so a chain's spread is a sum of squares over its
-levels, counting the wider upsample kernel separately from the downsample one. Inverting
-that gives the level count and tap offset for a wanted radius. Measured against a CPU
-Gaussian on a live session, two very different chains landed on their predictions:
+**The level chain is derived from the wanted radius.** Taps at level `i` reach `2^(i-1)`
+source texels and independent passes add variance, so a chain's spread is a sum of squares
+over its levels, counting the wider upsample kernel separately from the downsample one.
+Inverting that gives the level count and tap offset. Measured against a CPU Gaussian on a
+live session, two very different chains landed on their predictions:
 
 | radius | levels / keep / offset | predicted sigma | measured sigma |
 | ------ | ---------------------- | --------------- | -------------- |
 | 32     | 3 / 2 / 2.68           | 10.67           | 11             |
 | 96     | 4 / 2 / 3.85           | 32.0            | 32             |
 
-**Scrolling is a texture coordinate, not a transform.** `domain::geometry::sample_rect`
+**Scrolling moves a texture coordinate.** `domain::geometry::sample_rect`
 turns image size, viewport size, zoom and scroll position into a UV rectangle. Panning
 moves the rectangle; no pixels move, and nothing is re-uploaded.
 
@@ -174,6 +171,16 @@ own; a request crosses to the event loop and its answer crosses back. That way a
 that connects and says nothing holds up nobody, no socket read can stall a frame, and
 every mutation still happens on the one thread that owns the state.
 
+Events go the other way under the same rule: the loop queues them for each subscriber and
+the connection's own thread does the writing, so a client that has stopped reading fills a
+bounded queue rather than a frame's worth of the loop's time. What happens when one fills
+is in [control-protocol.md](control-protocol.md#events).
+
+What is on that stream follows from the pacing above. Sampling an animation per frame
+would mean a socket write per frame on the very path that was built to submit nothing
+while idle, and a listener would still be a frame behind, which is why one is described
+only as it starts.
+
 **Work that belongs to no output binds an offscreen surface.** Uploading a texture and
 baking a blur are not part of any monitor's frame, and a 1x1 pbuffer created at startup is
 what they are made current on. The alternative, a surfaceless binding, is an extension
@@ -195,10 +202,9 @@ scrolling layout. Both run through the same `axis` function in `policy`, the sam
 `axis` to the centre whatever the column is; turning it on is all that enabling horizontal
 parallax takes.
 
-The axes are configured apart rather than sharing a duration and easing because the
-compositor animates them apart: under niri they are `workspace-switch` and
-`horizontal-view-movement`, two animations with different defaults. One shared curve could
-only ever match one of them.
+The axes are configured apart because the compositor animates them apart, and one shared
+curve could only ever match one of the two. Which niri animation each pairs with is in
+[usage.md](usage.md#match-animations).
 
 **Both axes are per output, and the horizontal one had to be made so.** Focus is global,
 so reading the column off the focused window answers for one monitor and leaves every
@@ -222,21 +228,16 @@ Wallpaper transitions are carried the same way, from the two-slot `WallpaperSlot
 `domain` through to `u_mix` in the composite shader. This is on by default, so the second
 slot is normally occupied for the length of a fade and empty the rest of the time; with
 the mode off it is dropped on the same call that sets the new wallpaper and costs nothing
-at all. Either way a monitor appearing snaps, since coming into existence should not look
-like a transition.
+at all.
 
 The rule the crossfade follows is that an effect describes the output, not the image: a
 transition replaces the subject while the viewer holds still. So both slots share one set
 of effect values, and each is sampled through its own aspect-corrected rect. The outgoing
 image goes on being animated as it fades, rather than sliding against the incoming one.
 
-Two slots cannot hold three images, so a wallpaper set part-way through a fade displaces
-one of them. Whichever is the more visible is kept, bounding the discontinuity at half an
-image.
-
-A frame draws only layers it can sample at that frame's blur level. An outgoing slot whose
-bake is missing therefore leaves the frame and the swap becomes instant, which is quieter
-than crossfading one sharp half against one blurred half.
+Two slots cannot hold three images, and a frame draws only layers it can sample at that
+frame's blur level. Both bound the discontinuity at half an image; what a user sees when
+either applies is in [config.md](config.md#transition).
 
 ## Extension seams
 
@@ -247,8 +248,7 @@ Where the wallpaper sits when the overview opens is the compositor's decision, n
 program's. niri draws layer surfaces inside each workspace thumbnail by default, and puts
 them behind the overview only for surfaces a `layer-rule` selects, matched on the
 namespace. So the namespace is the seam, and `[general] namespace` is where a user says
-it. Its default is the program's own name, because a default carrying one compositor's
-rule would be a second definition point for that rule.
+it. Its default is the program's own name.
 
 ## Choosing a GPU is not part of this
 
@@ -256,8 +256,8 @@ The renderer builds its display with `eglGetPlatformDisplay(EGL_PLATFORM_WAYLAND
 on the `wl_display` the compositor gave it, and its surfaces with `wl_egl_window_create`.
 Device selection, buffer allocation and cross-GPU import are the EGL implementation's job
 on that path, and the compositor's dmabuf feedback tells it which device each surface
-should use. Hand-rolled dmabuf allocation would mean reimplementing that feedback handling,
-badly. Which variables a user sets instead is in
+should use. Hand-rolled dmabuf allocation would mean reimplementing that feedback handling.
+Which variables a user sets instead is in
 [environment.md](environment.md#choosing-a-gpu).
 
 ## Choosing a wallpaper is not part of this

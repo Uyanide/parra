@@ -13,7 +13,7 @@ use config::{Config, Watcher};
 use render::Renderer;
 use tracing::{info, warn};
 
-use super::bridge::{Bridge, Call};
+use super::bridge::{Ask, Bridge, Call};
 use super::{Daemon, describe};
 use crate::paths::Paths;
 
@@ -94,7 +94,10 @@ pub fn run(config: Config, paths: &Paths, name: &str, started: Instant) -> anyho
     handle
         .insert_source(requests, |event, _, daemon| {
             if let channel::Event::Msg(call) = event {
-                let response = daemon.on_request(call.request);
+                let response = match call.ask {
+                    Ask::Answer(request) => daemon.on_request(request),
+                    Ask::Listen(subscriber) => daemon.on_subscribe(subscriber),
+                };
                 // A client that gave up in the meantime is not an error worth reporting.
                 let _ = call.reply.send(response);
             }

@@ -10,11 +10,17 @@ A wlr-layer-shell wallpaper daemon that supports animation effects:
 
 and acts exactly like what would be expected from such promgrams:
 
-- **control via IPC** including setting wallpapers, setting blurring, quering
-  status etc.
 - **live wallpaper switching** without restarting or reinitialize the daemon
 - **automatic wallpaper restoration** at the next start
 - **configuration override** per monitor
+
+and with some extras:
+- **control via IPC** including setting wallpapers, setting blurring, quering
+  status etc
+- **a listenable event stream** that describes every animation as it starts, so
+  a bar or a widget can move in step without polling
+
+
 
 > [!NOTE]
 >

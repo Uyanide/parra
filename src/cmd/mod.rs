@@ -1,12 +1,13 @@
 pub mod blur;
 pub mod daemon;
+pub mod events;
 pub mod set;
 pub mod state;
 
 use std::path::Path;
 
 use anyhow::Context as _;
-use control::{Client, ClientError, PROTOCOL_VERSION, Request, Response};
+use control::{Client, ClientError, Micros, PROTOCOL_VERSION, Request, Response};
 use domain::OutputId;
 
 pub const EXIT_FAILURE: u8 = 1;
@@ -43,6 +44,16 @@ pub fn ping(socket: &Path) -> anyhow::Result<()> {
 
 pub fn output_id(name: &Option<String>) -> Option<OutputId> {
     name.as_ref().map(|name| OutputId::new(name.clone()))
+}
+
+/// A duration as the wire carries it, in what a person reads.
+pub fn millis(us: Micros) -> String {
+    format!("{:.2} ms", us as f64 / 1_000.0)
+}
+
+/// A path where there might be none, which every readable output spells the same way.
+pub fn path_or_none(path: Option<&Path>) -> String {
+    path.map_or_else(|| "none".to_owned(), |path| path.display().to_string())
 }
 
 pub fn unexpected(response: &Response) -> anyhow::Error {

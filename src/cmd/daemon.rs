@@ -2,8 +2,8 @@ use std::time::Instant;
 
 use tracing::{info, warn};
 
-use crate::daemon;
 use crate::paths::Paths;
+use crate::{cmd, daemon};
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -47,7 +47,10 @@ fn check(config: &config::Config, paths: &Paths) -> anyhow::Result<()> {
     println!("  namespace  {}", config.surface.namespace);
     println!("  layer      {:?}", config.surface.layer);
     println!("  socket     {}", paths.socket.display());
-    println!("  fallback   {}", describe(config.global.fallback.as_ref().map(|w| w.path())));
+    println!(
+        "  fallback   {}",
+        cmd::path_or_none(config.global.fallback.as_ref().map(|w| w.path()))
+    );
     println!("{}", paths.state.display());
     println!("  cache      {}", paths.cache_dir.display());
 
@@ -60,8 +63,4 @@ fn check(config: &config::Config, paths: &Paths) -> anyhow::Result<()> {
         println!("  {slot:<9}  {}", entry.source.display());
     }
     Ok(())
-}
-
-fn describe(path: Option<&std::path::Path>) -> String {
-    path.map_or_else(|| "none".to_owned(), |path| path.display().to_string())
 }

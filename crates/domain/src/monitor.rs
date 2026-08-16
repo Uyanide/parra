@@ -1,12 +1,24 @@
-use crate::anim::Motion;
+use crate::anim::{Motion, Move};
 use crate::blur::BlurState;
 use crate::geometry::{UvRect, sample_rect};
 use crate::output::{LogicalSize, OutputId, PixelSize, Scale};
 use crate::params::OutputParams;
 use crate::policy::Targets;
 use crate::scroll::ScrollState;
-use crate::wallpaper::{WallpaperRef, WallpaperSlot};
+use crate::wallpaper::{Swap, WallpaperRef, WallpaperSlot};
 use crate::zoom::ZoomState;
+
+/// The moves one call to [`MonitorState::apply`] started, per animated property.
+///
+/// Shaped like [`Targets`] on purpose: the two name the same four properties, and a second
+/// set of names for them would be a second thing to keep in step.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Moves {
+    pub scroll_v: Option<Move>,
+    pub scroll_h: Option<Move>,
+    pub blur: Option<Move>,
+    pub zoom: Option<Move>,
+}
 
 /// Live state of one output: its geometry, what it is showing, and the animations
 /// currently in flight on it.
@@ -64,20 +76,23 @@ impl MonitorState {
         self.params = params;
     }
 
-    /// Sets the wallpaper. Returns whether it differs from what is already showing.
-    pub fn set_wallpaper(&mut self, next: Option<WallpaperRef>) -> bool {
+    /// Sets the wallpaper. Returns the swap it made, and `None` when the wallpaper asked
+    /// for is the one already showing.
+    pub fn set_wallpaper(&mut self, next: Option<WallpaperRef>) -> Option<Swap> {
         self.wallpaper.set(next, &self.params.transition)
     }
 
-    /// Starts easing toward freshly resolved targets.
-    pub fn apply(&mut self, targets: &Targets) {
+    /// Starts easing toward freshly resolved targets, reporting whichever of them moved.
+    pub fn apply(&mut self, targets: &Targets) -> Moves {
         let scroll = self.params.scroll;
         let blur = self.params.blur;
         let overview = self.params.overview;
-        self.scroll.v.retarget(targets.scroll_v, scroll.vertical.tween);
-        self.scroll.h.retarget(targets.scroll_h, scroll.horizontal.tween);
-        self.blur.amount.retarget(targets.blur, blur.tween);
-        self.zoom.factor.retarget(targets.zoom, overview.tween);
+        Moves {
+            scroll_v: self.scroll.v.retarget(targets.scroll_v, scroll.vertical.tween),
+            scroll_h: self.scroll.h.retarget(targets.scroll_h, scroll.horizontal.tween),
+            blur: self.blur.amount.retarget(targets.blur, blur.tween),
+            zoom: self.zoom.factor.retarget(targets.zoom, overview.tween),
+        }
     }
 
     /// Jumps to the targets, for when arriving at them should not itself be an animation.
@@ -152,8 +167,27 @@ mod tests {
     fn setting_the_same_wallpaper_twice_reports_no_change() {
         let mut state = monitor();
         let wallpaper = Some(WallpaperRef::new("/tmp/a.png"));
-        assert!(state.set_wallpaper(wallpaper.clone()));
-        assert!(!state.set_wallpaper(wallpaper));
+        assert!(state.set_wallpaper(wallpaper.clone()).is_some());
+        assert_eq!(state.set_wallpaper(wallpaper), None);
+    }
+
+    #[test]
+    fn applying_targets_reports_only_what_moved() {
+        let mut state = monitor();
+        state.snap(&targets(0.0));
+
+        let moves = state.apply(&targets(1.0));
+        assert_eq!(moves.blur.map(|blur| (blur.from, blur.to)), Some((0.0, 1.0)));
+        assert_eq!(moves.scroll_v, None, "the targets it was already on did not move");
+        assert_eq!(moves.scroll_h, None);
+        assert_eq!(moves.zoom, None);
+    }
+
+    #[test]
+    fn applying_the_targets_already_held_reports_nothing() {
+        let mut state = monitor();
+        state.snap(&targets(1.0));
+        assert_eq!(state.apply(&targets(1.0)), Moves::default());
     }
 
     #[test]

@@ -97,6 +97,11 @@ focused window is floating or fullscreen and therefore has no place in the scrol
 An output blurs when it holds the focused window, or when the control socket has asked
 for it. Nothing focused anywhere leaves every output sharp.
 
+`radius` is measured in texels of the wallpaper texture, which is decoded at the buffer
+size times the deepest zoom. At rest one texel is one device pixel, so the configured
+number is the blur's extent on screen, and one radius means the same thing on monitors at
+different scales.
+
 ### `[overview]`
 
 | Key           | Default       | Meaning                                                                                                                                                                                                           |
@@ -126,8 +131,15 @@ A fade holds both wallpapers, and both of their blurs, until it finishes. That i
 same square as the figure above, so it is only worth thinking about alongside a
 `crop-ratio` near its floor. `mode = "none"` gives that memory back and swaps instantly.
 
-A monitor appearing, whether at startup or when it is plugged in, always snaps. Coming
-into existence should not look like a transition.
+A monitor appearing, whether at startup or when it is plugged in, always snaps.
+
+Two more cases a `"fade"` does not cover cleanly:
+
+- A `parra set` part-way through a fade. Only two wallpapers are held at once, so the new
+  one displaces whichever of the two on screen is the less visible.
+- An outgoing wallpaper with no baked blur at the level the frame needs. It leaves the
+  frame and the swap becomes instant, which looks better than crossfading a sharp half
+  against a blurred one.
 
 ## Reloading
 

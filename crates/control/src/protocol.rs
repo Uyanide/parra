@@ -1,6 +1,7 @@
+use std::fmt;
 use std::path::PathBuf;
 
-use domain::{Facts, LogicalSize, MonitorState, OutputId, Rgba};
+use domain::{Easing, Facts, LogicalSize, MonitorState, Move, OutputId, Rgba, Swap};
 use serde::{Deserialize, Serialize};
 
 /// Bumped whenever the wire format changes, including when it only gains a field.
@@ -44,6 +45,9 @@ pub enum Request {
         on: bool,
     },
     ReloadConfig,
+    /// Turns this connection into a stream of [`Event`]s. Nothing is answered on it after
+    /// the reply to this, so every line the daemon then sends is an event.
+    Subscribe,
     Ping,
 }
 
@@ -61,6 +65,153 @@ pub enum Response {
     State(StateSnapshot),
     Output(OutputSnapshot),
     Error { message: String },
+}
+
+/// One animated property of one output. Named apart from the snapshot fields because a
+/// stream has to say which value it is talking about, where a snapshot carries all of them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum Property {
+    ScrollVertical,
+    ScrollHorizontal,
+    Blur,
+    Zoom,
+}
+
+impl Property {
+    pub const ALL: [Property; 4] =
+        [Property::ScrollVertical, Property::ScrollHorizontal, Property::Blur, Property::Zoom];
+}
+
+impl fmt::Display for Property {
+    /// The name it goes by on the wire, so that anything printing one for a human does not
+    /// spell it a second time. A test keeps this and the serde name together.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Property::ScrollVertical => "scroll-vertical",
+            Property::ScrollHorizontal => "scroll-horizontal",
+            Property::Blur => "blur",
+            Property::Zoom => "zoom",
+        })
+    }
+}
+
+/// One line pushed to a subscribed connection, encoded the way a request is.
+///
+/// What is reported is the daemon's own decisions, at the moment it takes them:
+/// - Animations are reported once, whole, so a client can run the same curve rather than
+///   sample this one.
+/// - Compositor facts, per-frame values and configured parameters are not here. `get-state`
+///   has them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum Event {
+    /// A move that has just begun. A later one for the same output and property replaces
+    /// this, and `duration_us` of 0 means jump rather than animate.
+    Animation {
+        output: OutputId,
+        property: Property,
+        from: f32,
+        to: f32,
+        duration_us: Micros,
+        easing: Easing,
+    },
+    /// `from` is the image leaving the screen and `to` the one arriving; either can be
+    /// null. The transition is the one actually used, which is instant when there was
+    /// nothing to crossfade against.
+    WallpaperChanged {
+        output: OutputId,
+        from: Option<PathBuf>,
+        to: Option<PathBuf>,
+        duration_us: Micros,
+        easing: Easing,
+    },
+    /// An image that will not decode, reported once for the image. The outputs waiting on
+    /// it report their fallback separately.
+    WallpaperFailed {
+        path: PathBuf,
+    },
+    /// An output the daemon now holds state for, which is later than the compositor
+    /// knowing the monitor exists. Also sent for every output that already exists when a
+    /// connection subscribes, so a stream stands on its own.
+    OutputReady {
+        output: OutputId,
+        wallpaper: Option<PathBuf>,
+        values: Values,
+    },
+    OutputGone {
+        output: OutputId,
+    },
+    /// The configuration file was re-read and adopted. A reload that changed nothing is
+    /// not reported.
+    ConfigReloaded,
+}
+
+/// Where an output's animated values start.
+///
+/// Reported because a monitor appearing snaps rather than animating, so no [`Event`] of
+/// the animation kind will ever carry them.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Values {
+    pub scroll_vertical: f32,
+    pub scroll_horizontal: f32,
+    pub blur: f32,
+    pub zoom: f32,
+}
+
+impl Event {
+    /// Projects one started move into the wire form.
+    pub fn animation(output: &OutputId, property: Property, started: Move) -> Self {
+        Self::Animation {
+            output: output.clone(),
+            property,
+            from: started.from,
+            to: started.to,
+            duration_us: micros(started.tween.duration),
+            easing: started.tween.easing,
+        }
+    }
+
+    pub fn wallpaper_changed(output: &OutputId, swap: &Swap) -> Self {
+        Self::WallpaperChanged {
+            output: output.clone(),
+            from: swap.from.as_ref().map(|from| from.path().to_path_buf()),
+            to: swap.to.as_ref().map(|to| to.path().to_path_buf()),
+            duration_us: micros(swap.tween.duration),
+            easing: swap.tween.easing,
+        }
+    }
+
+    /// Projects a newly created output into the wire form, values included since they were
+    /// snapped rather than animated to.
+    pub fn output_ready(state: &MonitorState) -> Self {
+        Self::OutputReady {
+            output: state.id.clone(),
+            wallpaper: state.wallpaper.current().map(|w| w.path().to_path_buf()),
+            values: Values {
+                scroll_vertical: state.scroll.v.value(),
+                scroll_horizontal: state.scroll.h.value(),
+                blur: state.blur.amount.value(),
+                zoom: state.zoom.factor.value(),
+            },
+        }
+    }
+
+    /// Which output this is about, for a listener that wants one of them.
+    pub fn output(&self) -> Option<&OutputId> {
+        match self {
+            Self::Animation { output, .. }
+            | Self::WallpaperChanged { output, .. }
+            | Self::OutputReady { output, .. }
+            | Self::OutputGone { output } => Some(output),
+            Self::WallpaperFailed { .. } | Self::ConfigReloaded => None,
+        }
+    }
+}
+
+/// Seconds, as the animation layer counts them, in the unit the wire uses.
+fn micros(seconds: f32) -> Micros {
+    (seconds.max(0.0) * 1e6) as Micros
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -182,6 +333,8 @@ fn tween(animated: &domain::Animated) -> Tween {
 
 #[cfg(test)]
 mod tests {
+    use domain::{OutputParams, WallpaperRef};
+
     use super::*;
 
     fn round_trip(request: &Request) -> Request {
@@ -203,6 +356,7 @@ mod tests {
             Request::SetWallpaper { output: Some(OutputId::new("DP-1")), path: None, save: true },
             Request::SetBlur { output: Some(OutputId::new("eDP-1")), on: true },
             Request::ReloadConfig,
+            Request::Subscribe,
             Request::Ping,
         ];
         for request in requests {
@@ -287,5 +441,97 @@ mod tests {
         let response = Response::Pong { version: PROTOCOL_VERSION };
         let line = serde_json::to_string(&response).unwrap();
         assert_eq!(serde_json::from_str::<Response>(&line).unwrap(), response);
+    }
+
+    fn output() -> OutputId {
+        OutputId::new("DP-1")
+    }
+
+    /// The animation kind of tween, which is not the wire's [`Tween`] of the same name.
+    fn curve() -> domain::Tween {
+        domain::Tween::new(0.4, Easing::OutCubic)
+    }
+
+    fn monitor() -> MonitorState {
+        MonitorState::new(output(), OutputParams::default(), None)
+    }
+
+    #[test]
+    fn events_survive_the_wire() {
+        let events = [
+            Event::animation(
+                &output(),
+                Property::Blur,
+                Move { from: 0.0, to: 1.0, tween: curve() },
+            ),
+            Event::wallpaper_changed(
+                &output(),
+                &Swap {
+                    from: Some(WallpaperRef::new("/srv/a.png")),
+                    to: Some(WallpaperRef::new("/srv/b.png")),
+                    tween: curve(),
+                },
+            ),
+            Event::WallpaperFailed { path: PathBuf::from("/srv/broken.png") },
+            Event::output_ready(&monitor()),
+            Event::OutputGone { output: output() },
+            Event::ConfigReloaded,
+        ];
+        for event in events {
+            let line = serde_json::to_string(&event).unwrap();
+            assert!(!line.contains('\n'), "an event must fit on one line: {line}");
+            assert_eq!(serde_json::from_str::<Event>(&line).unwrap(), event);
+        }
+    }
+
+    #[test]
+    fn an_event_names_itself_the_way_a_request_does() {
+        let started = Move { from: 0.0, to: 1.0, tween: curve() };
+        assert_eq!(
+            serde_json::to_string(&Event::animation(&output(), Property::ScrollVertical, started))
+                .unwrap(),
+            r#"{"animation":{"output":"DP-1","property":"scroll-vertical","from":0.0,"to":1.0,"duration_us":400000,"easing":"out-cubic"}}"#
+        );
+        assert_eq!(serde_json::to_string(&Event::ConfigReloaded).unwrap(), "\"config-reloaded\"");
+    }
+
+    #[test]
+    fn a_swap_with_nothing_to_fade_against_reports_no_duration() {
+        let swap = Swap {
+            from: None,
+            to: Some(WallpaperRef::new("/srv/a.png")),
+            tween: domain::Tween::INSTANT,
+        };
+        let Event::WallpaperChanged { from, duration_us, .. } =
+            Event::wallpaper_changed(&output(), &swap)
+        else {
+            panic!("that is what was built")
+        };
+        assert_eq!(from, None);
+        assert_eq!(duration_us, 0, "a client is told to jump, not to fade from nothing");
+    }
+
+    #[test]
+    fn an_output_arrives_with_the_values_no_animation_will_report() {
+        let state = monitor();
+        let Event::OutputReady { values, .. } = Event::output_ready(&state) else {
+            panic!("that is what was built")
+        };
+        assert_eq!(values.zoom, state.zoom.factor.value(), "the zoom it was snapped to");
+        assert_eq!(values.blur, state.blur.amount.value());
+    }
+
+    #[test]
+    fn a_property_prints_the_name_it_goes_by_on_the_wire() {
+        for property in Property::ALL {
+            assert_eq!(format!("\"{property}\""), serde_json::to_string(&property).unwrap());
+        }
+    }
+
+    #[test]
+    fn only_the_events_about_one_output_name_one() {
+        assert_eq!(Event::OutputGone { output: output() }.output(), Some(&output()));
+        assert_eq!(Event::ConfigReloaded.output(), None);
+        assert_eq!(Event::WallpaperFailed { path: PathBuf::new() }.output(), None);
     }
 }

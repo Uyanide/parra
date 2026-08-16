@@ -7,9 +7,10 @@ use std::time::{Duration, Instant};
 
 use config::Config;
 use control::{
-    GpuSnapshot, Micros, OutputSnapshot, PROTOCOL_VERSION, Request, Response, StateSnapshot,
+    Event, GpuSnapshot, Micros, OutputSnapshot, PROTOCOL_VERSION, Property, Request, Response,
+    StateSnapshot, Subscriber, Subscribers,
 };
-use domain::{Facts, MonitorState, OutputId, PixelSize, Signals, WallpaperRef, policy};
+use domain::{Facts, MonitorState, Moves, OutputId, PixelSize, Signals, WallpaperRef, policy};
 use render::{Cache, RenderError, RenderEvent, Renderer};
 use store::Store;
 use tracing::{debug, info, trace, warn};
@@ -27,6 +28,9 @@ pub struct Daemon {
     facts: Facts,
     signals: Signals,
     store: Store,
+    /// Everyone listening for what the daemon decides. A field rather than something
+    /// reached through `self`, so emitting borrows only this while the states are held.
+    subscribers: Subscribers,
     /// Per output, so two monitors at different refresh rates each advance by their own
     /// elapsed time rather than a shared one.
     clocks: BTreeMap<OutputId, Instant>,
@@ -62,6 +66,7 @@ impl Daemon {
             facts: Facts::default(),
             signals: Signals::default(),
             store,
+            subscribers: Subscribers::default(),
             clocks: BTreeMap::new(),
             watcher: None,
             started,
@@ -131,11 +136,10 @@ impl Daemon {
             if let Some(wallpaper) = &wallpaper {
                 self.announce(wallpaper);
             }
-            if let Some(state) = self.states.get_mut(&id)
-                && state.set_wallpaper(wallpaper)
-            {
-                self.clocks.insert(id, now);
-            }
+            let swap = self.states.get_mut(&id).and_then(|state| state.set_wallpaper(wallpaper));
+            let Some(swap) = swap else { continue };
+            self.clocks.insert(id.clone(), now);
+            self.subscribers.emit(&Event::wallpaper_changed(&id, &swap));
         }
     }
 
@@ -213,6 +217,7 @@ impl Daemon {
                     debug!(output = %id, "dropping output state");
                     self.states.remove(&id);
                     self.clocks.remove(&id);
+                    self.subscribers.emit(&Event::OutputGone { output: id });
                 }
                 RenderEvent::FrameDue { id } => self.tick(&id),
                 RenderEvent::WallpaperStored { wallpaper, asked } => {
@@ -240,6 +245,8 @@ impl Daemon {
         state.scale = scale;
         state.snap(&policy::resolve(&id, &self.facts, &self.signals, &state.params));
         self.clocks.insert(id.clone(), Instant::now());
+        // Snapped, so no animation event will ever carry these values: the arrival does.
+        self.subscribers.emit(&Event::output_ready(&state));
         self.states.insert(id, state);
     }
 
@@ -267,6 +274,9 @@ impl Daemon {
             path = %wallpaper.path().display(),
             "falling back for now, and trying this again on the next start"
         );
+        // Ahead of the fallbacks it causes, so a listener reads the reason before the
+        // consequences. Nothing else reports this: the client that asked was told `done`.
+        self.subscribers.emit(&Event::WallpaperFailed { path: wallpaper.path().to_path_buf() });
         self.signals.forget_wallpaper(wallpaper);
         // The configured fallback may be the very thing that just failed, which is why
         // this is not simply a re-resolve: showing nothing is the honest answer there,
@@ -302,8 +312,9 @@ impl Daemon {
                 zoom = targets.zoom,
                 "resolved"
             );
-            state.apply(&targets);
+            let moves = state.apply(&targets);
             self.clocks.insert(id.clone(), now);
+            announce_moves(&mut self.subscribers, id, moves);
         }
     }
 
@@ -348,7 +359,27 @@ impl Daemon {
                 Ok(()) => Response::Done,
                 Err(message) => Response::Error { message },
             },
+            // The socket answers this one itself, since the queue it needs belongs to the
+            // connection rather than to the loop.
+            Request::Subscribe => Response::Error {
+                message: "subscribe is answered on the connection it arrives on".to_owned(),
+            },
         }
+    }
+
+    /// Takes on a listener, first describing every output that already exists.
+    ///
+    /// Nothing can be emitted between the description and the registration: both happen
+    /// here, on the one thread that emits at all.
+    fn on_subscribe(&mut self, subscriber: Subscriber) -> Response {
+        for state in self.states.values() {
+            if !subscriber.send(&Event::output_ready(state)) {
+                return Response::Error { message: "cannot start the event stream".to_owned() };
+            }
+        }
+        debug!(outputs = self.states.len(), "a listener subscribed");
+        self.subscribers.add(subscriber);
+        Response::Done
     }
 
     /// Puts one output on the wire, measurement included.
@@ -442,6 +473,9 @@ impl Daemon {
 
         info!(path = %self.config_path.display(), "configuration reloaded");
         self.config = next;
+        // Ahead of the params and the wallpapers, so a listener reads this before whatever
+        // it set moving. The parameters themselves are read back with `get-state`.
+        self.subscribers.emit(&Event::ConfigReloaded);
 
         let ids: Vec<OutputId> = self.states.keys().cloned().collect();
         for id in ids {
@@ -462,6 +496,24 @@ impl Daemon {
 
 fn unknown_output(id: &OutputId) -> Response {
     Response::Error { message: format!("no output named {id}") }
+}
+
+/// Puts whichever animations just started on the wire, one line each.
+///
+/// Free rather than a method because the states are borrowed for the length of a resolve,
+/// so the listeners have to be reached without going through the whole daemon.
+fn announce_moves(subscribers: &mut Subscribers, output: &OutputId, moves: Moves) {
+    let by_property = [
+        (Property::ScrollVertical, moves.scroll_v),
+        (Property::ScrollHorizontal, moves.scroll_h),
+        (Property::Blur, moves.blur),
+        (Property::Zoom, moves.zoom),
+    ];
+    for (property, started) in by_property {
+        if let Some(started) = started {
+            subscribers.emit(&Event::animation(output, property, started));
+        }
+    }
 }
 
 /// Longest an animation advances in one step. Comfortably above any real refresh

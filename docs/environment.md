@@ -1,8 +1,7 @@
 # Environment
 
 Several things the daemon needs are already decided by mechanisms outside it. It reads
-those and adds no control of its own, since a second control point would be a second
-source of truth.
+those and adds no control of its own.
 
 | What                           | Decided by                                             | What the daemon does                                                                                    |
 | ------------------------------ | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |

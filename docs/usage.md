@@ -3,6 +3,62 @@
 Build and install the binary first, as the [README#build](../README.md#build) describes.
 Everything below assumes `parra` is on your `PATH`.
 
+## TL;DR
+
+Parra can work with any compositor that supports wlr-layer-shell, but only few are
+supported with animated effects (e.g. scrolling, blurring, zooming).
+
+For niri, put these in niri's config (normally `~/.config/niri/config.kdl`) and make
+sure nothing is overriding them:
+
+```kdl
+layer-rule {
+  match namespace="^parra$"
+  place-within-backdrop true
+}
+
+layout {
+  background-color "transparent"
+}
+
+overview {
+  workspace-shadow {
+    off
+  }
+}
+
+animations {
+  workspace-switch {
+    duration-ms 400
+    curve "ease-out-cubic"
+  }
+
+  overview-open-close {
+    duration-ms 400
+    curve "ease-out-cubic"
+  }
+}
+
+spawn-at-startup "parra" "daemon"
+```
+
+then restart niri, or start parra manually at once by executing:
+
+```bash
+niri msg action spawn -- parra daemon
+```
+
+and set the wallpapaer you like by executing:
+
+```bash
+parra set /path/to/preferred/wallpaper.ext
+```
+
+> [!IMPORTANT]
+>
+> Above is only a quick guide. If you run into any troubles or wonder how these things
+> work, please refer to the following sections and other documentations.
+
 ## Compositor integration
 
 ### niri
@@ -119,9 +175,14 @@ spawn-at-startup "parra" "daemon"
 
 ## Configuration
 
+> [!NOTE]
+>
+> The configuration file is **OPTIONAL**, a missing file is _NOT_ an error, as the
+> built-in defaults are a working configuration. Only create the configuration file
+> when one is needed.
+
 parra reads `$XDG_CONFIG_HOME/parra/config.toml`, falling back to
-`~/.config/parra/config.toml`. A missing file is _NOT_ an error, as the built-in defaults
-are a working configuration.
+`~/.config/parra/config.toml`.
 
 ```sh
 mkdir -p ~/.config/parra
@@ -137,7 +198,7 @@ parra daemon --check
 
 That prints the resolved namespace, layer, socket and fallback, where the remembered
 wallpaper is kept and what it currently is, or names the offending key and its accepted
-range. Unknown keys are rejected rather than ignored.
+range.
 
 The daemon watches the config file, so an edit takes effect on save. `[general]
 namespace` and `[general] layer` are the exception and take effect on the next start; see
@@ -148,17 +209,17 @@ namespace` and `[general] layer` are the exception and take effect on the next s
 Hand one to the running daemon:
 
 ```sh
-parra set ~/pictures/wall.png                  # every output
+parra set ~/pictures/wall.png               # every output
 parra set ~/pictures/other.png --output eDP-1
-parra set ~/pictures/passing.png --no-save     # this session only
+parra set ~/pictures/passing.png --no-save  # this session only, not restored after restart
 ```
 
 `set` returns immediately and the current image stays up until the new one is ready. A
-file that turns out not to be an image is reported in the log, not to the caller.
+file that turns out not to be an image is reported in the log; see
+[environment.md](environment.md#logging).
 
 That choice is remembered. It outlives a config reload, outlives a monitor being
-unplugged and plugged back in, and outlives the daemon: it comes back at the next start,
-from a resized copy, so restarting costs a fraction of the first decode.
+unplugged and plugged back in, and outlives the daemon.
 
 `unset` takes one back:
 
@@ -167,9 +228,12 @@ parra unset --output eDP-1     # eDP-1 goes back to whatever every output is on
 parra unset                    # every output goes back to the config file
 ```
 
-It reveals rather than blanks, walking the order the daemon resolves in: an output's own
-wallpaper, then the one set for every output, then `[wallpaper] fallback`, then nothing.
-Only when there is nothing left underneath does a screen go empty.
+It reveals rather than blanks, walking the order the daemon resolves in:
+
+1. an output's own wallpaper
+2. the one set for every output
+3. `[wallpaper] fallback`
+4. nothing.
 
 `--no-save` works on both and means the same thing on each: change what is on screen now
 and leave the record alone, so the next start goes back to what it says. On `set` that is
@@ -188,7 +252,7 @@ so the two never compete for the slot. Where the choice and the copies are kept 
 
 ## State and cache
 
-Two more locations, neither of them meant to be edited by hand. `--state PATH` and
+Two more locations, **neither** of them meant to be edited by hand. `--state PATH` and
 `--cache-dir PATH` override them.
 
 | Location                           | Holds                                                                        |
@@ -199,17 +263,11 @@ Two more locations, neither of them meant to be edited by hand. `--state PATH` a
 `$HOME/.local/state` and `$HOME/.cache` are the fallbacks, as the XDG specification
 prescribes.
 
-The state file records the path you asked for, never the copy. It is rewritten by `parra
-set` and `parra unset` and by nothing else, so an image that will not load stays recorded:
-the daemon logs it, falls back for that session, and tries again on the next start.
+The state file records the path you asked form which is rewritten by `parra set` and
+`parra unset`.
 
 Do _NOT_ edit it by hand. The daemon reads it once at startup and rewrites it whole on
-every change, so an edit made while it is running is overwritten with no warning. `parra
-set` and `parra unset` are how it is meant to change; see
-[Choosing a wallpaper](#choosing-a-wallpaper).
-
-Deleting either location is safe. The state file is what a restart shows; the cache is
-only speed, and every file in it can be produced again from the original.
+every change, so an edit made while it is running is overwritten with no warning.
 
 A copy is kept at the size the largest monitor showing it needs. It is used again as long
 as it still covers that, and re-made from the original when it does not, which is what a
@@ -236,12 +294,46 @@ For scripts, `--json` prints the reply verbatim:
 parra state --json | jq '.state.outputs[] | {name, blur: .blur.amount.current}'
 ```
 
+## Listening for changes
+
+Whatever else you run on your screen can follow the wallpaper instead of polling it:
+
+```sh
+parra events                   # readable, one line per change
+parra events --json            # for scripts
+parra events --output DP-1     # only what concerns one monitor
+```
+
+The stream opens with a line per monitor, describing what it shows and where its values
+are, so nothing needs a `parra state` beside it. After that it reports what the daemon
+decides: a wallpaper changing, an image that would not decode, a monitor arriving or
+leaving, the config file being adopted, and every animation as it starts.
+
+An animation carries where it is going, how long it takes and which curve it uses:
+
+```sh
+parra events --json --output DP-1 \
+  | jq -c --unbuffered 'select(.animation?.property == "blur") | .animation'
+```
+
+```json
+{ "output": "DP-1", "property": "blur", "from": 0.0, "to": 1.0, "duration_us": 300000, "easing": "in-out-cubic" }
+```
+
+That is enough for a bar to blur in step with the wallpaper behind it, on its own clock,
+without asking again. Listening costs the daemon no frames.
+
+The stream ends only when the daemon does, and `parra events` then exits 1, so a supervisor
+can restart it. Every event and the rules it follows is in
+[control-protocol.md](control-protocol.md#events).
+
 ## The blur signal
 
 The blur signal is for whatever else is on your screen: a bar or a sidebar can ask for
 the wallpaper behind it to blur while it is up, and turn it off again afterwards. Blur is
-otherwise driven by window focus alone. Omitting `--output` broadcasts, which also clears
-any per-output requests, so a broadcast is always authoritative.
+otherwise driven by window focus alone.
+
+_'output blurs'_ = _'the focused window is on this output'_ **OR** _'blur signal is set for this output'_
 
 Command syntax and exit codes are in [cli.md](cli.md). The full protocol, every request
 and response, is in [control-protocol.md](control-protocol.md).

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use thiserror::Error;
 
-use crate::protocol::{PROTOCOL_VERSION, Request, Response};
+use crate::protocol::{Event, PROTOCOL_VERSION, Request, Response};
 
 /// Long enough that a busy daemon is never mistaken for a hung one, short enough that a
 /// script does not wedge.
@@ -21,7 +21,7 @@ pub enum ClientError {
         #[source]
         source: io::Error,
     },
-    #[error("the daemon closed the connection without replying")]
+    #[error("the daemon closed the connection")]
     Closed,
     #[error("the daemon sent a malformed reply")]
     Malformed {
@@ -69,6 +69,20 @@ impl Client {
         }
     }
 
+    /// Turns this connection into a stream of events.
+    ///
+    /// It consumes the client because a subscribed connection answers nothing further.
+    /// Every output that already exists arrives as an event, so the stream describes the
+    /// whole daemon without a second request.
+    pub fn subscribe(mut self) -> Result<Subscription, ClientError> {
+        // Only a refusal matters here: any other reply means the daemon took the listener.
+        self.request(&Request::Subscribe)?;
+        // The read timeout is what stops a request wedging a script. A stream that says
+        // nothing for five seconds is just a quiet stream.
+        self.reader.get_ref().set_read_timeout(None).map_err(|source| self.io(source))?;
+        Ok(Subscription { path: self.path, reader: self.reader })
+    }
+
     /// Restates a failure as [`ClientError::Mismatch`] when the versions disagree, since
     /// rejected fields are what a skew looks like. Only a failing request pays the ping.
     fn diagnose(&mut self, error: ClientError) -> ClientError {
@@ -103,5 +117,30 @@ impl Client {
 
     fn io(&self, source: io::Error) -> ClientError {
         ClientError::Io { path: self.path.clone(), source }
+    }
+}
+
+/// The client's end of a subscription, read one event per line. `Subscriber` is the
+/// daemon's end of the same thing.
+///
+/// It runs out only when the daemon goes away, so a caller that wants to keep listening
+/// connects again rather than treating the end as a result.
+pub struct Subscription {
+    path: PathBuf,
+    reader: BufReader<UnixStream>,
+}
+
+impl Iterator for Subscription {
+    type Item = Result<Event, ClientError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut line = String::new();
+        match self.reader.read_line(&mut line) {
+            Ok(0) => None,
+            Ok(_) => Some(
+                serde_json::from_str(&line).map_err(|source| ClientError::Malformed { source }),
+            ),
+            Err(source) => Some(Err(ClientError::Io { path: self.path.clone(), source })),
+        }
     }
 }

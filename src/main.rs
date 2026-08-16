@@ -65,6 +65,8 @@ enum Command {
     Blur(cmd::blur::Args),
     /// Report what the daemon is currently showing.
     State(cmd::state::Args),
+    /// Follow what the daemon changes, one event per line, until it stops.
+    Events(cmd::events::Args),
     /// Re-read the config file.
     Reload,
     /// Check that the daemon is responding.
@@ -101,6 +103,7 @@ fn run(cli: Cli, started: Instant) -> anyhow::Result<()> {
         Command::Unset(args) => cmd::set::unset(args, &paths.socket),
         Command::Blur(args) => cmd::blur::run(args, &paths.socket),
         Command::State(args) => cmd::state::run(args, &paths.socket),
+        Command::Events(args) => cmd::events::run(args, &paths.socket),
         Command::Reload => cmd::reload(&paths.socket),
         Command::Ping => cmd::ping(&paths.socket),
     }
@@ -120,4 +123,30 @@ fn init_logging(is_daemon: bool) {
     let default = if is_daemon { "info" } else { "warn" };
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
     tracing_subscriber::fmt().with_env_filter(filter).with_writer(std::io::stderr).init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A global option and a subcommand's own argument sharing a name is not a conflict
+    /// clap can see: it panics inside `parse`, on that subcommand alone and only once the
+    /// two are read back as different types. Parsing every subcommand is what finds it.
+    #[test]
+    fn every_subcommand_parses_beside_the_global_options() {
+        let globals = ["--config", "/c", "--socket", "/s", "--state", "/t", "--cache-dir", "/d"];
+        for tail in [
+            ["daemon"].as_slice(),
+            &["set", "/srv/a.png"],
+            &["unset"],
+            &["blur", "on"],
+            &["state"],
+            &["events"],
+            &["reload"],
+            &["ping"],
+        ] {
+            let argv = [&[NAME][..], &globals, tail].concat();
+            Cli::try_parse_from(argv).unwrap_or_else(|error| panic!("{}: {error}", tail[0]));
+        }
+    }
 }

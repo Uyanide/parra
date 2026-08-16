@@ -64,6 +64,15 @@ impl Tween {
     }
 }
 
+/// A move that has just been started, for whoever has to report one. A snap reports too,
+/// with an instant tween, since a jump is what a client is meant to reproduce there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Move {
+    pub from: f32,
+    pub to: f32,
+    pub tween: Tween,
+}
+
 /// Whether anything is still moving.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Motion {
@@ -127,19 +136,26 @@ impl Animated {
 
     /// Aims at a new target starting from the *current* value, so redirecting mid-flight
     /// never jumps. Re-requesting the target already in flight is a no-op.
-    pub fn retarget(&mut self, to: f32, tween: Tween) {
+    ///
+    /// Returns the move it started, which is `None` for that no-op. Deciding here rather
+    /// than by comparing values afterwards keeps one answer to "did an animation begin".
+    pub fn retarget(&mut self, to: f32, tween: Tween) -> Option<Move> {
         if self.to == to && self.tween.easing == tween.easing {
-            return;
+            return None;
         }
         let from = self.value();
         if tween.is_instant() || from == to {
+            // Landing where it already rests is not a move, however the curve changed.
+            // Landing there from mid-flight is one: whoever followed it must stop too.
+            let moved = from != to || !self.is_settled();
             self.snap(to);
-            return;
+            return moved.then_some(Move { from, to, tween: Tween::INSTANT });
         }
         self.from = from;
         self.to = to;
         self.elapsed = 0.0;
         self.tween = tween;
+        Some(Move { from, to, tween })
     }
 
     pub fn tick(&mut self, dt: f32) -> Motion {
@@ -242,6 +258,59 @@ mod tests {
         animated.retarget(1.0, Tween::new(0.0, Easing::OutCubic));
         assert!(animated.is_settled());
         assert_eq!(animated.value(), 1.0);
+    }
+
+    #[test]
+    fn a_started_move_is_reported_whole() {
+        let tween = Tween::new(0.4, Easing::OutCubic);
+        let mut animated = Animated::new(0.25);
+        assert_eq!(animated.retarget(1.0, tween), Some(Move { from: 0.25, to: 1.0, tween }));
+    }
+
+    #[test]
+    fn a_retarget_that_changes_nothing_reports_nothing() {
+        let tween = Tween::new(1.0, Easing::Linear);
+        let mut animated = Animated::new(0.0);
+        animated.retarget(1.0, tween);
+        animated.tick(0.5);
+        assert_eq!(animated.retarget(1.0, tween), None);
+    }
+
+    #[test]
+    fn a_snap_reports_a_move_of_no_duration() {
+        let mut animated = Animated::new(0.0);
+        let started = animated.retarget(1.0, Tween::new(0.0, Easing::OutCubic));
+        assert_eq!(started, Some(Move { from: 0.0, to: 1.0, tween: Tween::INSTANT }));
+    }
+
+    #[test]
+    fn settling_where_it_already_rests_reports_nothing_even_on_a_new_curve() {
+        let mut animated = Animated::new(1.0);
+        assert_eq!(animated.retarget(1.0, Tween::new(0.4, Easing::OutQuint)), None);
+    }
+
+    #[test]
+    fn a_move_cut_short_is_reported_so_a_follower_stops_too() {
+        let mut animated = Animated::new(0.0);
+        animated.retarget(1.0, Tween::new(1.0, Easing::Linear));
+        animated.tick(0.5);
+
+        let started = animated.retarget(animated.value(), Tween::INSTANT);
+        assert_eq!(started.map(|started| started.tween), Some(Tween::INSTANT));
+    }
+
+    #[test]
+    fn a_move_started_mid_flight_reports_where_it_actually_starts() {
+        let tween = Tween::new(1.0, Easing::Linear);
+        let mut animated = Animated::new(0.0);
+        animated.retarget(1.0, tween);
+        animated.tick(0.5);
+
+        let Some(started) = animated.retarget(0.0, tween) else { panic!("that is a new move") };
+        assert!(
+            (started.from - 0.5).abs() < EPS,
+            "reporting the previous origin would put a listener half an animation out"
+        );
     }
 
     #[test]
