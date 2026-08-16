@@ -15,7 +15,7 @@ use tracing_subscriber::EnvFilter;
 const NAME: &str = env!("CARGO_PKG_NAME");
 
 #[derive(Parser)]
-#[command(version, about = "Scrolling, blurring wallpaper for wlr-layer-shell compositors")]
+#[command(version, about = "Wallpaper daemon with compositor-driven effects, for wlr-layer-shell")]
 struct Cli {
     #[arg(
         long,

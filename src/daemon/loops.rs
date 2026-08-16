@@ -200,7 +200,7 @@ fn spawn_backend(
     let Some(mut backend) = compositor::backends::detect() else {
         warn!(
             supported = ?compositor::backends::AVAILABLE,
-            "no compositor backend for this session, so nothing will scroll or blur"
+            "no compositor backend for this session, so the effects it drives stay at rest"
         );
         return Ok(());
     };

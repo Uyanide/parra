@@ -140,8 +140,8 @@ wallpaper is kept and what it currently is, or names the offending key and its a
 range. Unknown keys are rejected rather than ignored.
 
 The daemon watches the config file, so an edit takes effect on save. `[general]
-namespace` and `[general] layer` are the exception: a layer surface is given both when it
-is created, so those two take effect on the next start.
+namespace` and `[general] layer` are the exception and take effect on the next start; see
+[config.md](config.md#reloading).
 
 ## Choosing a wallpaper
 
@@ -152,6 +152,9 @@ parra set ~/pictures/wall.png                  # every output
 parra set ~/pictures/other.png --output eDP-1
 parra set ~/pictures/passing.png --no-save     # this session only
 ```
+
+`set` returns immediately and the current image stays up until the new one is ready. A
+file that turns out not to be an image is reported in the log, not to the caller.
 
 That choice is remembered. It outlives a config reload, outlives a monitor being
 unplugged and plugged back in, and outlives the daemon: it comes back at the next start,
@@ -164,9 +167,14 @@ parra unset --output eDP-1     # eDP-1 goes back to whatever every output is on
 parra unset                    # every output goes back to the config file
 ```
 
-It reveals rather than blanks. An output that loses its own wallpaper shows the one set
-for every output, and one that loses that shows `[wallpaper] fallback`. Only when there is
-nothing left underneath does a screen go empty.
+It reveals rather than blanks, walking the order the daemon resolves in: an output's own
+wallpaper, then the one set for every output, then `[wallpaper] fallback`, then nothing.
+Only when there is nothing left underneath does a screen go empty.
+
+`--no-save` works on both and means the same thing on each: change what is on screen now
+and leave the record alone, so the next start goes back to what it says. On `set` that is
+a wallpaper shown without being adopted; on `unset` it is one dropped without being
+forgotten.
 
 The config file only says what to show when nothing has been chosen yet:
 
@@ -176,11 +184,38 @@ fallback = "~/pictures/wall.png"
 ```
 
 so the two never compete for the slot. Where the choice and the copies are kept is in
-[config.md](config.md#state-and-cache).
+[State and cache](#state-and-cache).
 
-Decoding happens on another thread, so `set` returns immediately and the current image
-stays up until the new one is ready. A file that turns out not to be an image or fails
-to decode is reported in the log, rather to the requester.
+## State and cache
+
+Two more locations, neither of them meant to be edited by hand. `--state PATH` and
+`--cache-dir PATH` override them.
+
+| Location                           | Holds                                                                        |
+| ---------------------------------- | ---------------------------------------------------------------------------- |
+| `$XDG_STATE_HOME/parra/state.toml` | Which wallpaper each slot was last set to, so a restart restores it.         |
+| `$XDG_CACHE_HOME/parra/*.qoi`      | Those wallpapers, already resized, so a restart skips decoding the original. |
+
+`$HOME/.local/state` and `$HOME/.cache` are the fallbacks, as the XDG specification
+prescribes.
+
+The state file records the path you asked for, never the copy. It is rewritten by `parra
+set` and `parra unset` and by nothing else, so an image that will not load stays recorded:
+the daemon logs it, falls back for that session, and tries again on the next start.
+
+Do _NOT_ edit it by hand. The daemon reads it once at startup and rewrites it whole on
+every change, so an edit made while it is running is overwritten with no warning. `parra
+set` and `parra unset` are how it is meant to change; see
+[Choosing a wallpaper](#choosing-a-wallpaper).
+
+Deleting either location is safe. The state file is what a restart shows; the cache is
+only speed, and every file in it can be produced again from the original.
+
+A copy is kept at the size the largest monitor showing it needs. It is used again as long
+as it still covers that, and re-made from the original when it does not, which is what a
+rotation, a resolution change, a scale change or a smaller `crop-ratio` all amount to.
+Copies no longer pointed at are deleted when the daemon starts and after every `set` or
+`unset`.
 
 ## Checking it works
 
@@ -201,49 +236,15 @@ For scripts, `--json` prints the reply verbatim:
 parra state --json | jq '.state.outputs[] | {name, blur: .blur.amount.current}'
 ```
 
-## Everyday commands
-
-```sh
-parra daemon                              # run it
-parra set ~/pictures/wall.png             # change the wallpaper
-parra unset --output DP-1                 # drop one monitor's own wallpaper
-parra blur on --output DP-1               # external blur signal
-parra state                               # what is on screen
-parra state --json | jq                   # the same, for scripts
-parra reload                              # re-read the config file
-```
-
-`--config PATH` and `--socket PATH` work on any subcommand.
+## The blur signal
 
 The blur signal is for whatever else is on your screen: a bar or a sidebar can ask for
 the wallpaper behind it to blur while it is up, and turn it off again afterwards. Blur is
 otherwise driven by window focus alone. Omitting `--output` broadcasts, which also clears
 any per-output requests, so a broadcast is always authoritative.
 
-The full protocol, every request and response, and the exit codes are in
-[control-protocol.md](control-protocol.md).
-
-## Running under systemd instead
-
-If you would rather use systemd units for autostart:
-
-```ini
-[Unit]
-Description=parra wallpaper daemon
-PartOf=graphical-session.target
-After=graphical-session.target
-
-[Service]
-ExecStart=%h/.local/bin/parra daemon
-Restart=on-failure
-
-[Install]
-WantedBy=graphical-session.target
-```
-
-The unit needs `WAYLAND_DISPLAY` and some other environment variables including those set
-by the compositor. See [environment.md](environment.md) for the variables that matter and
-for pinning the daemon to a particular GPU.
+Command syntax and exit codes are in [cli.md](cli.md). The full protocol, every request
+and response, is in [control-protocol.md](control-protocol.md).
 
 ## Troubleshooting
 

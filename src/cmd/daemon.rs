@@ -34,7 +34,7 @@ pub fn run(args: &Args, paths: &Paths, name: &str, started: Instant) -> anyhow::
     if let Some(backend) = compositor::backends::detect() {
         info!(backend = backend.name(), "compositor backend selected");
     } else {
-        warn!("no compositor backend available, scroll and blur will not react");
+        warn!("no compositor backend available, the effects it drives will not react");
     }
 
     daemon::run(config, paths, name, started)

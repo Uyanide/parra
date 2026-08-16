@@ -4,14 +4,10 @@ The daemon reads `$XDG_CONFIG_HOME/parra/config.toml`, falling back to
 `$HOME/.config/parra/config.toml`. `--config PATH` overrides the location.
 
 A missing file is not an error: the built-in defaults are a working configuration.
-
 [config.example.toml](../config.example.toml) lists every key with its default.
 
-Validate a file without starting anything:
-
-```sh
-parra daemon --check --config ./config.toml
-```
+Validate a file without starting anything with `parra daemon --check --config ./config.toml`;
+see [cli.md](cli.md).
 
 ## Inheritance
 
@@ -51,7 +47,7 @@ effect on the **next start**.
 
 `parra set` is remembered across restarts and takes precedence over this, so `fallback`
 is what a monitor shows before anything has ever been chosen for it, and what it falls
-back to if the chosen image will not load. See [state and cache](#state-and-cache).
+back to if the chosen image will not load. See [usage.md](usage.md#state-and-cache).
 
 Paths may be absolute, start with `~/`, or be relative. A relative path resolves against
 the config file's own directory, since a daemon's working directory is not something a
@@ -130,55 +126,16 @@ A fade holds both wallpapers, and both of their blurs, until it finishes. That i
 same square as the figure above, so it is only worth thinking about alongside a
 `crop-ratio` near its floor. `mode = "none"` gives that memory back and swaps instantly.
 
-The outgoing wallpaper keeps scrolling and blurring along with the incoming one, since
-those describe the output rather than the image. Setting a third wallpaper part-way
-through a fade drops one of the two in flight, which shows as a small jump.
-
 A monitor appearing, whether at startup or when it is plugged in, always snaps. Coming
 into existence should not look like a transition.
 
-## State and cache
+## Reloading
 
-Two more locations, neither of them meant to be edited by hand. `--state PATH` and
-`--cache-dir PATH` override them.
-
-| Location                           | Holds                                                                        |
-| ---------------------------------- | ---------------------------------------------------------------------------- |
-| `$XDG_STATE_HOME/parra/state.toml` | Which wallpaper each slot was last set to, so a restart restores it.         |
-| `$XDG_CACHE_HOME/parra/*.qoi`      | Those wallpapers, already resized, so a restart skips decoding the original. |
-
-`$HOME/.local/state` and `$HOME/.cache` are the fallbacks, as the XDG specification
-prescribes.
-
-The state file records the path you asked for, never the copy. It is rewritten by `parra
-set` and `parra unset` and by nothing else, so an image that will not load stays recorded:
-the daemon logs it, falls back for that session, and tries again on the next start.
-Deleting either location is safe. The state file is what a restart shows; the cache is
-only speed, and every file in it can be produced again from the original.
-
-Do _NOT_ edit it by hand. The daemon reads it once at startup and rewrites it whole on
-every change, so an edit made while it is running is overwritten with no warning. Use
-`parra unset` to take back a wallpaper:
-
-```sh
-parra unset --output DP-1     # DP-1 goes back to whatever every output is on
-parra unset                   # every output goes back to `fallback`
-```
-
-Clearing reveals rather than blanks, walking the same order the daemon resolves in: an
-output's own wallpaper, then the one set for every output, then `fallback`, then nothing.
-The copy of whatever is dropped is swept in the same breath.
-
-A copy is kept at the size the largest monitor showing it needs. It is used again as long
-as it still covers that, and re-made from the original when it does not, which is what a
-rotation, a resolution change, a scale change or a smaller `crop-ratio` all amount to.
-The old copy keeps drawing meanwhile, so nothing stalls. Copies no longer pointed at are
-deleted when the daemon starts and after every `set` or `unset`.
-
-`--no-save` works on both and means the same thing on each: change what is on screen now
-and leave the file alone, so the next start goes back to what it records. On `set` that is
-a wallpaper shown without being adopted; on `unset` it is one dropped without being
-forgotten.
+The daemon watches the configuration file, so an edit takes effect without anyone
+sending `reload-config`. An editor that saves by writing a temporary file and renaming it
+over the original is handled too. `[general] namespace` and
+`[general] layer` are the exception: a layer surface is given both when it is created, so
+those two take effect on the next start.
 
 ## Easing functions
 

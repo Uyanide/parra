@@ -31,7 +31,7 @@ numbers into one answer.
 | Crate        | Knows                                                            | Must not know                                                                      |
 | ------------ | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | `domain`     | Identities, geometry, animation, resolved parameters, policy     | Wayland, OpenGL, compositors, files, sockets, the clock                            |
-| `compositor` | How one compositor talks and how to normalize what it says       | Blur, scroll offsets, config, rendering, the control socket                        |
+| `compositor` | How one compositor talks and how to normalize what it says       | What its facts drive, config, rendering, the control socket                        |
 | `render`     | Wayland, EGL/GLES, image decoding, how to draw a `MonitorState`  | Compositors, the control protocol, why a value is what it is, which GPU it runs on |
 | `config`     | The TOML surface, merge rules, file watching                     | Rendering, compositors, IPC                                                        |
 | `control`    | The request and response wire format, socket plumbing            | How to satisfy a request                                                           |
@@ -225,11 +225,10 @@ the mode off it is dropped on the same call that sets the new wallpaper and cost
 at all. Either way a monitor appearing snaps, since coming into existence should not look
 like a transition.
 
-The rule the crossfade follows is that blur, zoom and scroll describe the output, not the
-image: a transition replaces the subject while the viewer holds still. So both slots share
-one blur factor and one tint, and each is sampled through its own aspect-corrected rect.
-The outgoing image goes on parallaxing and zooming as it fades, rather than sliding
-against the incoming one.
+The rule the crossfade follows is that an effect describes the output, not the image: a
+transition replaces the subject while the viewer holds still. So both slots share one set
+of effect values, and each is sampled through its own aspect-corrected rect. The outgoing
+image goes on being animated as it fades, rather than sliding against the incoming one.
 
 Two slots cannot hold three images, so a wallpaper set part-way through a fade displaces
 one of them. Whichever is the more visible is kept, bounding the discontinuity at half an
@@ -250,6 +249,16 @@ them behind the overview only for surfaces a `layer-rule` selects, matched on th
 namespace. So the namespace is the seam, and `[general] namespace` is where a user says
 it. Its default is the program's own name, because a default carrying one compositor's
 rule would be a second definition point for that rule.
+
+## Choosing a GPU is not part of this
+
+The renderer builds its display with `eglGetPlatformDisplay(EGL_PLATFORM_WAYLAND_KHR, ...)`
+on the `wl_display` the compositor gave it, and its surfaces with `wl_egl_window_create`.
+Device selection, buffer allocation and cross-GPU import are the EGL implementation's job
+on that path, and the compositor's dmabuf feedback tells it which device each surface
+should use. Hand-rolled dmabuf allocation would mean reimplementing that feedback handling,
+badly. Which variables a user sets instead is in
+[environment.md](environment.md#choosing-a-gpu).
 
 ## Choosing a wallpaper is not part of this
 

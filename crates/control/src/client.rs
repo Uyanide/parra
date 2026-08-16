@@ -36,8 +36,8 @@ pub enum ClientError {
 
 /// One connection to the daemon, one request at a time.
 ///
-/// Every subcommand except `daemon` is one round trip on this and nothing else, which is
-/// why they start without touching a graphics stack.
+/// Every subcommand except `daemon` is one round trip on this, which is why they start
+/// without touching a graphics stack.
 pub struct Client {
     path: PathBuf,
     reader: BufReader<UnixStream>,

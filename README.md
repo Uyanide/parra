@@ -41,7 +41,8 @@ common:
 
 - [Usage](docs/usage.md) — compositor integration and instructions for normal usage
 - [Configuration](docs/config.md) — every key, defaults, per-monitor inheritance
-- [Control protocol](docs/control-protocol.md) — the socket, the CLI, exit codes
+- [CLI](docs/cli.md) — command syntax, global flags, exit codes
+- [Control protocol](docs/control-protocol.md) — the socket, requests, responses, snapshots
 - [Environment](docs/environment.md) — GPU selection, logging, where files go, and what is
   deliberately not configurable
 

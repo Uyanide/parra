@@ -31,7 +31,7 @@ pub struct Frame<'a> {
 /// The one program that draws a wallpaper.
 ///
 /// A crossfade is the same pass with a second pair of textures bound. Both layers share
-/// the blur factor and the tint, which describe the output rather than the image.
+/// the effect uniforms, which describe the output rather than the image.
 pub struct Composite {
     program: glow::Program,
     vao: glow::VertexArray,

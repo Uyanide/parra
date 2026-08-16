@@ -29,14 +29,11 @@ slow start rather than a wrong wallpaper.
 
 ## Choosing a GPU
 
-The renderer builds its display with `eglGetPlatformDisplay(EGL_PLATFORM_WAYLAND_KHR,
-...)` on the `wl_display` the compositor gave it, and its surfaces with
-`wl_egl_window_create`. Device selection, buffer allocation and cross-GPU import are the
-EGL implementation's job on that path, and the compositor's dmabuf feedback tells it
-which device each surface should use. This is what ordinary GUI applications do, and it
-is why a machine whose monitors hang off two different DRM devices works without the
-daemon knowing anything about it. Hand-rolled dmabuf allocation would mean reimplementing
-that feedback handling, badly.
+The daemon picks no device of its own. It renders the way any ordinary GUI application
+does, leaving device selection, buffer allocation and cross-GPU import to the EGL
+implementation and the compositor, which is why a machine whose monitors hang off two
+different DRM devices works without being told anything about it. Why it is built that way
+is in [architecture.md](architecture.md#choosing-a-gpu-is-not-part-of-this).
 
 To pin it somewhere specific, set the same variables you would for any other GUI
 application. Some combination of:
