@@ -56,7 +56,7 @@ pub struct AxisParams {
 
 impl Default for AxisParams {
     fn default() -> Self {
-        Self { enabled: true, travel: 1.0, tween: Tween::new(0.4, Easing::OutCubic) }
+        Self { enabled: true, travel: 1.0, tween: Tween::new(0.3, Easing::OutCubic) }
     }
 }
 
@@ -78,7 +78,7 @@ impl Default for BlurParams {
             downscale: 4,
             tint: Rgba::from_bytes([0x1e, 0x1e, 0x2e, 0xff]),
             tint_opacity: 0.5,
-            tween: Tween::new(0.4, Easing::InOutCubic),
+            tween: Tween::new(0.3, Easing::InOutCubic),
         }
     }
 }
@@ -104,7 +104,7 @@ pub struct OverviewParams {
 
 impl Default for OverviewParams {
     fn default() -> Self {
-        Self { crop_ratio: 0.9, tween: Tween::new(0.4, Easing::OutCubic) }
+        Self { crop_ratio: 0.9, tween: Tween::new(0.3, Easing::OutCubic) }
     }
 }
 

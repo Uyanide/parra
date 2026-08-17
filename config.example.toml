@@ -31,7 +31,7 @@ enabled = true
 travel = 1.0
 
 # 0 makes the move instant.
-duration-ms = 400
+duration-ms = 300
 
 # linear, out-quad, in-out-quad, out-cubic, in-out-cubic, out-quint
 easing = "out-cubic"
@@ -41,7 +41,7 @@ easing = "out-cubic"
 [scroll.horizontal]
 enabled = false
 travel = 1.0
-duration-ms = 400
+duration-ms = 300
 easing = "out-cubic"
 
 [blur]
@@ -57,14 +57,14 @@ tint = "#1e1e2e"
 # Multiplied into the tint's own alpha.
 tint-opacity = 0.5
 
-duration-ms = 400
+duration-ms = 300
 easing = "in-out-cubic"
 
 [overview]
 # Fraction of the image visible when the overview is closed. The rest is the
 # headroom the parallax scrolls through, so 1.0 means no scrolling at all.
 crop-ratio = 0.9
-duration-ms = 400
+duration-ms = 300
 easing = "out-cubic"
 
 [transition]

@@ -8,10 +8,10 @@ Everything below assumes `parra` is on your `PATH`.
 Parra can work with any compositor that supports wlr-layer-shell, but only few are
 supported with animated effects (e.g. scrolling, blurring, zooming).
 
-For niri, put these in niri's config (normally `~/.config/niri/config.kdl`) and make
-sure nothing is overriding them:
+For niri, execute in bash:
 
-```kdl
+```bash
+cat > "${XDG_CONFIG_HOME:-${HOME}/.config}/niri/parra.kdl" << 'EOF_PARRA_KDL'
 layer-rule {
   match namespace="^parra$"
   place-within-backdrop true
@@ -29,17 +29,22 @@ overview {
 
 animations {
   workspace-switch {
-    duration-ms 400
+    duration-ms 300
     curve "ease-out-cubic"
   }
 
   overview-open-close {
-    duration-ms 400
+    duration-ms 300
     curve "ease-out-cubic"
   }
 }
 
 spawn-at-startup "parra" "daemon"
+EOF_PARRA_KDL
+
+cat >> "${XDG_CONFIG_HOME:-${HOME}/.config}/niri/config.kdl" << 'EOF_CONFIG_KDL'
+include "parra.kdl"
+EOF_CONFIG_KDL
 ```
 
 then restart niri, or start parra manually at once by executing:
@@ -121,12 +126,12 @@ means converting niri's to the easing form:
 ```kdl
 animations {
   workspace-switch {
-    duration-ms 400
+    duration-ms 300
     curve "ease-out-cubic"
   }
 
   overview-open-close {
-    duration-ms 400
+    duration-ms 300
     curve "ease-out-cubic"
   }
 }
@@ -137,7 +142,7 @@ and for the horizontal parallax, if you enable it:
 ```kdl
 animations {
   horizontal-view-movement {
-    duration-ms 400
+    duration-ms 300
     curve "ease-out-cubic"
   }
 }

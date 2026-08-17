@@ -66,7 +66,7 @@ are per output.
 | ------------- | ----------------------------------- | ---------------------------------------------------------------------------- |
 | `enabled`     | `true` vertical, `false` horizontal | When false the image is pinned to its centre on that axis.                   |
 | `travel`      | `1.0`                               | Fraction of the available travel to use, `0..=1`, measured about the centre. |
-| `duration-ms` | `400`                               | `0` makes the move instant. Capped at 60000.                                 |
+| `duration-ms` | `300`                               | `0` makes the move instant. Capped at 60000.                                 |
 | `easing`      | `"out-cubic"`                       | See [easing functions](#easing-functions).                                   |
 
 ```toml
@@ -91,7 +91,7 @@ focused window is floating or fullscreen and therefore has no place in the scrol
 | `downscale`    | `4`              | Linear downscale of the baked blur texture, `1..=16`. Higher is cheaper in both VRAM and bake time. |
 | `tint`         | `"#1e1e2e"`      | `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`.                                                          |
 | `tint-opacity` | `0.5`            | `0..=1`, multiplied into the tint's own alpha.                                                      |
-| `duration-ms`  | `400`            |                                                                                                     |
+| `duration-ms`  | `300`            |                                                                                                     |
 | `easing`       | `"in-out-cubic"` | See [easing functions](#easing-functions).                                                          |
 
 An output blurs when it holds the focused window, or when the control socket has asked
@@ -107,7 +107,7 @@ different scales.
 | Key           | Default       | Meaning                                                                                                                                                                                                           |
 | ------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `crop-ratio`  | `0.9`         | Fraction of the image visible while the overview is closed, `0.25..=1`. The remainder is the headroom the parallax travels through, so `1.0` leaves nothing to scroll unless the image is taller than the screen. |
-| `duration-ms` | `400`         |                                                                                                                                                                                                                   |
+| `duration-ms` | `300`         |                                                                                                                                                                                                                   |
 | `easing`      | `"out-cubic"` | See [easing functions](#easing-functions).                                                                                                                                                                        |
 
 Opening the overview zooms back out to show the whole image.
