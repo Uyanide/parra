@@ -1,6 +1,12 @@
 # parra
 
-A wlr-layer-shell wallpaper daemon that supports animation effects:
+![showcase](./docs/images/scroll.webp)
+
+> The illustration: [하얀새 - 星いっぱいの空とめぐみん (Pixiv)][showcase-source]
+
+[showcase-source]: https://www.pixiv.net/artworks/77297453
+
+A wlr-layer-shell wallpaper daemon that supports compositor-driven effects:
 
 - **vertical parallax scrolling** that follows the workspace
 - **horizontal parallax scrolling** that follows the focusing column (disabled
@@ -8,34 +14,70 @@ A wlr-layer-shell wallpaper daemon that supports animation effects:
 - **blurring and tinting** that follows window focus
 - **zoom-in/out** that follows overview's close/open
 
-and acts exactly like what would be expected from such promgrams:
+and behaves exactly as expected for this type of program:
 
-- **live wallpaper switching** without restarting or reinitialize the daemon
+- **live wallpaper switching** without restarting or reinitializing the daemon
+- **transition effect** when switching
 - **automatic wallpaper restoration** at the next start
 - **configuration override** per monitor
 
 and with some extras:
+
 - **control via IPC** including setting wallpapers, setting blurring, quering
-  status etc
-- **a listenable event stream** that describes every animation as it starts, so
-  a bar or a widget can move in step without polling
-
-
+  status, subscribing event-stream etc.
+- **a listenable event stream** that describes every animation as it starts and
+  reports changes in the status such as wallpapers and outputs
 
 > [!NOTE]
 >
 > Only niri is supported so far. Support for more compositors might be added
 > in the (near) future.
 
-## Build
+## Dependencies
 
-This is a standard cargo project with a single binary output, so build with
+Native libraries:
 
-```sh
-cargo build --release --frozen
+- libwayland (client)
+- libwayland (EGL platform)
+- libglvnd (EGL)
+
+Buildtime:
+
+- pkg-config
+- rust toolchain (>=1.88)
+
+Runtime:
+
+- A supported compositor
+
+These can be installed with apt on Debian/Ubuntu:
+
+```bash
+sudo apt install libwayland-dev libegl-dev pkgconf
 ```
 
-and (optionally) install in the way and the directory you like, e.g.
+or with pacman on Archlinux:
+
+```bash
+sudo pacman -S --needed wayland libglvnd mesa pkgconf
+```
+
+The rust toolchain can be installed with the distro's package manager (e.g.
+`rustc` and `cargo` on Debian/Ubuntu), or with [rustup][rustup-home], which
+often provides newer versions and more flexibility.
+
+[rustup-home]: https://rustup.rs
+
+## Build
+
+This is a standard cargo project with a single binary output, so you can build
+it normally with
+
+```sh
+cargo build --release --locked
+```
+
+and (optionally) install in the way you like, e.g.
 
 ```sh
 sudo install -Dm755 -t /usr/local/bin target/release/parra
