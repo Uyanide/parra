@@ -52,11 +52,11 @@ pub fn run(args: &Args, socket: &Path) -> anyhow::Result<()> {
 
 fn print_output(output: &OutputSnapshot) {
     let mut flags = Vec::new();
-    if output.focused {
-        flags.push("focused");
+    if output.channels.blur {
+        flags.push("blurred");
     }
-    if output.overview {
-        flags.push("overview");
+    if output.channels.zoom_out {
+        flags.push("zoomed-out");
     }
     flags.push(if output.settled { "settled" } else { "animating" });
 
@@ -69,6 +69,7 @@ fn print_output(output: &OutputSnapshot) {
         flags.join(" ")
     );
     println!("  wallpaper  {}", cmd::path_or_none(output.wallpaper.as_deref()));
+    println!("  driven     x {:.3}  y {:.3}", output.channels.scroll_x, output.channels.scroll_y);
     println!(
         "  scroll     v {}  h {}",
         tween(output.scroll.vertical),
@@ -82,10 +83,6 @@ fn print_output(output: &OutputSnapshot) {
         output.blur.tint
     );
     println!("  zoom       {}", tween(output.zoom));
-    println!(
-        "  workspace  {}/{}  column {}/{}",
-        output.workspace.index, output.workspace.count, output.column.index, output.column.count
-    );
     if let (Some(last), Some(peak)) = (output.gpu.last_us, output.gpu.peak_us) {
         println!("  gpu        {} per frame, {} at worst", cmd::millis(last), cmd::millis(peak));
     }

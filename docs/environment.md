@@ -16,7 +16,7 @@ those and adds no control of its own.
 
 | Variable          | Falls back to        | Holds                                           |
 | ----------------- | -------------------- | ----------------------------------------------- |
-| `XDG_CONFIG_HOME` | `$HOME/.config`      | `parra/config.toml`                             |
+| `XDG_CONFIG_HOME` | `$HOME/.config`      | `parra/<compositor>.toml`                       |
 | `XDG_RUNTIME_DIR` | nothing; required    | `parra-$WAYLAND_DISPLAY.sock`                   |
 | `XDG_STATE_HOME`  | `$HOME/.local/state` | `parra/state.toml`, the wallpaper to restore    |
 | `XDG_CACHE_HOME`  | `$HOME/.cache`       | `parra/*.qoi`, those wallpapers already resized |

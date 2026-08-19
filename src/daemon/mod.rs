@@ -10,22 +10,30 @@ use control::{
     Event, GpuSnapshot, Micros, OutputSnapshot, PROTOCOL_VERSION, Property, Request, Response,
     StateSnapshot, Subscriber, Subscribers,
 };
-use domain::{Facts, MonitorState, Moves, OutputId, PixelSize, Signals, WallpaperRef, policy};
+use domain::{Driven, MonitorState, Moves, OutputId, PixelSize, Signals, WallpaperRef, policy};
 use render::{Cache, RenderError, RenderEvent, Renderer};
 use store::Store;
 use tracing::{debug, info, trace, warn};
 
 pub use loops::run;
 
+/// Everything the daemon needs that was settled before it started.
+pub struct Startup {
+    pub config: Config,
+    /// `None` when no backend was detected and none was named, so no file applied.
+    pub config_path: Option<PathBuf>,
+    pub backend: Option<compositor::backends::Settings>,
+}
+
 /// Everything the running daemon holds.
 pub struct Daemon {
     renderer: Renderer,
     config: Config,
-    config_path: PathBuf,
+    config_path: Option<PathBuf>,
     /// Fallback layer-shell namespace.
     name: String,
     states: BTreeMap<OutputId, MonitorState>,
-    facts: Facts,
+    driven: Driven,
     signals: Signals,
     store: Store,
     /// Everyone listening for what the daemon decides. A field rather than something
@@ -40,8 +48,8 @@ pub struct Daemon {
     /// When the process began, and how long it took to put something on a screen.
     started: Instant,
     startup_us: Option<Micros>,
-    /// Set when the facts or signals changed and the targets have not been re-derived
-    /// yet. Batches a burst of compositor events into one resolve.
+    /// Set when the driven channels or signals changed and the targets have not been
+    /// re-derived yet. Batches a burst of compositor events into one resolve.
     stale: bool,
     /// First error out of the renderer. The event loop cannot carry it, so it waits here
     /// until the loop has stopped.
@@ -52,7 +60,7 @@ impl Daemon {
     fn new(
         renderer: Renderer,
         config: Config,
-        config_path: PathBuf,
+        config_path: Option<PathBuf>,
         name: String,
         started: Instant,
         store: Store,
@@ -63,7 +71,7 @@ impl Daemon {
             config_path,
             name,
             states: BTreeMap::new(),
-            facts: Facts::default(),
+            driven: Driven::default(),
             signals: Signals::default(),
             store,
             subscribers: Subscribers::default(),
@@ -152,12 +160,12 @@ impl Daemon {
         }
     }
 
-    /// Folds one normalized fact into the accumulated view of the world.
+    /// Folds one driven channel into the accumulated view of the world.
     ///
-    /// A single compositor action produces a burst of facts, so the resolve waits for
+    /// A single compositor action produces a burst of these, so the resolve waits for
     /// the end of the loop iteration and happens once.
-    fn on_compositor(&mut self, event: compositor::CompositorEvent) {
-        self.stale |= event.apply_to(&mut self.facts);
+    fn on_compositor(&mut self, drive: compositor::Drive) {
+        self.stale |= drive.apply_to(&mut self.driven);
     }
 
     /// Brings the screen up to date, then drains anything that arrived while doing so.
@@ -243,7 +251,7 @@ impl Daemon {
         let mut state = MonitorState::new(id.clone(), params, wallpaper);
         state.logical = logical;
         state.scale = scale;
-        state.snap(&policy::resolve(&id, &self.facts, &self.signals, &state.params));
+        state.snap(&policy::resolve(&id, &self.driven, &self.signals, &state.params));
         self.clocks.insert(id.clone(), Instant::now());
         // Snapped, so no animation event will ever carry these values: the arrival does.
         self.subscribers.emit(&Event::output_ready(&state));
@@ -295,19 +303,19 @@ impl Daemon {
         }
     }
 
-    /// Re-derives every output's targets and eases toward them. Called when the facts,
-    /// the signals or the configuration change, never when only geometry did.
+    /// Re-derives every output's targets and eases toward them. Called when the driven
+    /// channels, the signals or the configuration change, never when only geometry did.
     fn resolve(&mut self) {
         // The animations start now, so the clocks do too. A clock left at the last frame
         // of the previous one would spend the whole idle period on the first tick.
         let now = Instant::now();
         for (id, state) in &mut self.states {
-            let targets = policy::resolve(id, &self.facts, &self.signals, &state.params);
-            let workspace = self.facts.output(id).workspace;
+            let targets = policy::resolve(id, &self.driven, &self.signals, &state.params);
+            let channels = self.driven.output(id);
             debug!(
                 output = %id,
-                workspace = format!("{}/{}", workspace.idx, workspace.count),
-                scroll = targets.scroll_v,
+                driven = %format!("{:.3},{:.3}", channels.scroll_x, channels.scroll_y),
+                scroll = %format!("{:.3},{:.3}", targets.scroll_h, targets.scroll_v),
                 blur = targets.blur,
                 zoom = targets.zoom,
                 "resolved"
@@ -389,7 +397,7 @@ impl Daemon {
     fn snapshot(&self, state: &MonitorState) -> OutputSnapshot {
         let cost = self.renderer.frame_cost(&state.id);
         let gpu = GpuSnapshot { last_us: cost.last_us(), peak_us: cost.peak_us() };
-        OutputSnapshot::new(state, &self.facts, gpu)
+        OutputSnapshot::new(state, &self.driven, gpu)
     }
 
     /// Every set is a new wallpaper, even one naming the path already on screen.
@@ -449,7 +457,12 @@ impl Daemon {
     /// progress should not take the wallpaper down with it. The message is what the client
     /// is told, if there is one.
     fn reload(&mut self) -> Result<(), String> {
-        let loaded = config::load(&self.config_path, &self.name).map_err(|error| {
+        let Some(path) = self.config_path.clone() else {
+            let message = "there is no configuration file to reload".to_owned();
+            warn!(error = %message, "nothing to do");
+            return Err(message);
+        };
+        let loaded = config::load(&path, &self.name).map_err(|error| {
             let message = describe(error);
             warn!(error = %message, "keeping the configuration already loaded");
             message
@@ -465,13 +478,23 @@ impl Daemon {
             );
             next.surface = self.config.surface.clone();
         }
+        let compositor_edited = next.compositor_table() != self.config.compositor_table()
+            || !next.compositor_overrides().eq(self.config.compositor_overrides());
+        if compositor_edited {
+            // Not kept like the surface is: nothing reads it back, and the running
+            // backend goes on driving the channels the way it was started with.
+            warn!(
+                "compositor settings are read when the backend connects, \
+                 so they take effect on the next start"
+            );
+        }
 
         if next == self.config {
-            debug!(path = %self.config_path.display(), "reloaded, nothing changed");
+            debug!(path = %path.display(), "reloaded, nothing changed");
             return Ok(());
         }
 
-        info!(path = %self.config_path.display(), "configuration reloaded");
+        info!(path = %path.display(), "configuration reloaded");
         self.config = next;
         // Ahead of the params and the wallpapers, so a listener reads this before whatever
         // it set moving. The parameters themselves are read back with `get-state`.

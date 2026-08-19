@@ -1,14 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use domain::OutputId;
+use domain::{OutputId, ScrollState};
 
 use super::wire::{Event, Window, Workspace};
-use crate::event::CompositorEvent;
+use super::{Axis, Params};
+use crate::backends::Scoped;
+use crate::event::Drive;
 
-/// Everything the backend must remember to answer "which monitor has the focus".
+/// Everything the backend must remember to turn niri's report into channel positions.
 ///
 /// The compositor reports focus as a window id and scroll position as a workspace index.
-/// Joining those to an output is this file's entire job.
+/// Joining those to an output, and normalizing them, is this file's entire job.
 #[derive(Debug, Default)]
 pub struct Tracker {
     workspaces: HashMap<u64, WorkspaceSlot>,
@@ -30,6 +32,17 @@ struct WorkspaceSlot {
     output: Option<OutputId>,
     idx: u32,
     active: bool,
+}
+
+/// Maps a one-based position within `count` onto `0..=1`.
+///
+/// A lone or not-yet-known position sits centred, having nothing to travel between.
+fn progress(idx: u32, count: u32) -> f32 {
+    if count <= 1 || idx == 0 {
+        return ScrollState::CENTRE;
+    }
+    let position = idx.min(count) - 1;
+    position as f32 / (count - 1) as f32
 }
 
 impl Tracker {
@@ -81,13 +94,13 @@ impl Tracker {
         self.workspace_column.insert(workspace, column);
     }
 
-    /// Restates the whole world as normalized facts.
+    /// Restates the whole world as channel positions.
     ///
     /// Everything is emitted after every event rather than diffed here, because the
-    /// receiving end already ignores facts that did not change. A diff would be a
-    /// second, subtler copy of that same bookkeeping.
-    pub fn facts(&self) -> Vec<CompositorEvent> {
-        let mut events = vec![CompositorEvent::OutputsChanged { outputs: self.outputs() }];
+    /// receiving end already ignores values that did not change.
+    pub fn drives(&self, settings: &Scoped<Params>) -> Vec<Drive> {
+        let mut drives = vec![Drive::OutputsChanged { outputs: self.outputs() }];
+        let focused = self.focused_output();
 
         for (output, workspaces) in self.workspaces_by_output() {
             let count = workspaces.len() as u32;
@@ -95,15 +108,34 @@ impl Tracker {
                 .iter()
                 .find(|slot| slot.active)
                 .map_or(0, |slot| slot.idx.min(count.max(1)));
-            events.push(CompositorEvent::WorkspaceActive { output: output.clone(), idx, count });
+            let workspace = (idx, count);
 
-            let (column, columns) = self.columns_on(&output);
-            events.push(CompositorEvent::ColumnActive { output, idx: column, count: columns });
+            let params = settings.for_output(&output);
+            let x = self.axis(&output, params.horizontal, workspace);
+            let y = self.axis(&output, params.vertical, workspace);
+            drives.push(Drive::Scrolled { output: output.clone(), x, y });
+
+            // niri focuses one window at a time, so at most one output is blurred. Every
+            // output is told either way, so the one losing focus hears about it.
+            let blurred = focused.as_ref() == Some(&output);
+            drives.push(Drive::Blurred { output: output.clone(), on: blurred });
+
+            // The overview covers every output at once.
+            drives.push(Drive::ZoomedOut { output, on: self.overview });
         }
+        drives
+    }
 
-        events.push(CompositorEvent::FocusMoved { output: self.focused_output() });
-        events.push(CompositorEvent::OverviewToggled { active: self.overview });
-        events
+    /// Where one axis sits, given what it was configured to follow.
+    fn axis(&self, output: &OutputId, axis: Axis, workspace: (u32, u32)) -> f32 {
+        match axis {
+            Axis::Workspace => progress(workspace.0, workspace.1),
+            Axis::Column => {
+                let (idx, count) = self.columns_on(output);
+                progress(idx, count)
+            }
+            Axis::None => ScrollState::CENTRE,
+        }
     }
 
     /// The monitor holding the focused window. Focus is global, so at most one.
@@ -228,6 +260,15 @@ mod tests {
     use super::*;
     use crate::backends::niri::wire;
 
+    const DEFAULTS: Params = Params { vertical: Axis::Workspace, horizontal: Axis::None };
+    const BY_COLUMN: Params = Params { vertical: Axis::Workspace, horizontal: Axis::Column };
+
+    /// The same settings for every output, which is what a file with no per-output table
+    /// resolves to.
+    fn everywhere(params: Params) -> Scoped<Params> {
+        Scoped::new(params)
+    }
+
     fn feed(tracker: &mut Tracker, line: &str) {
         let event = wire::parse(line).expect("valid JSON").expect("a modelled event");
         tracker.apply(event);
@@ -256,44 +297,120 @@ mod tests {
         tracker
     }
 
-    fn workspace_of(facts: &[CompositorEvent], want: &str) -> (u32, u32) {
-        facts
+    fn scroll_of(drives: &[Drive], want: &str) -> (f32, f32) {
+        drives
             .iter()
-            .find_map(|event| match event {
-                CompositorEvent::WorkspaceActive { output, idx, count }
-                    if output.as_str() == want =>
-                {
-                    Some((*idx, *count))
-                }
+            .find_map(|drive| match drive {
+                Drive::Scrolled { output, x, y } if output.as_str() == want => Some((*x, *y)),
                 _ => None,
             })
             .expect("the output should be reported")
     }
 
-    fn columns_of(facts: &[CompositorEvent], want: &str) -> (u32, u32) {
-        facts
-            .iter()
-            .find_map(|event| match event {
-                CompositorEvent::ColumnActive { output, idx, count } if output.as_str() == want => {
-                    Some((*idx, *count))
-                }
-                _ => None,
-            })
-            .expect("columns should be reported")
+    fn vertical_of(drives: &[Drive], want: &str) -> f32 {
+        scroll_of(drives, want).1
     }
 
-    fn focus_of(facts: &[CompositorEvent]) -> Option<OutputId> {
-        facts.iter().find_map(|event| match event {
-            CompositorEvent::FocusMoved { output } => Some(output.clone()),
-            _ => None,
-        })?
+    fn horizontal_of(drives: &[Drive], want: &str) -> f32 {
+        scroll_of(drives, want).0
+    }
+
+    fn blurred(drives: &[Drive]) -> Vec<&str> {
+        drives
+            .iter()
+            .filter_map(|drive| match drive {
+                Drive::Blurred { output, on: true } => Some(output.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn zoomed_out(drives: &[Drive]) -> Vec<(&str, bool)> {
+        drives
+            .iter()
+            .filter_map(|drive| match drive {
+                Drive::ZoomedOut { output, on } => Some((output.as_str(), *on)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The names printed by [`Axis`] are the ones a file is written with, so `--check`
+    /// reports settings in the spelling they were typed in.
+    #[test]
+    fn every_axis_prints_the_name_serde_reads() {
+        for axis in [Axis::Workspace, Axis::Column, Axis::None] {
+            let json = format!(r#"{{"vertical":"{axis}"}}"#);
+            let params: Params = serde_json::from_str(&json).expect("its own name should parse");
+            assert_eq!(params.vertical, axis);
+        }
+    }
+
+    #[test]
+    fn the_constants_here_are_the_real_defaults() {
+        assert_eq!(DEFAULTS, Params::default());
+    }
+
+    #[test]
+    fn a_position_spans_the_sequence() {
+        assert_eq!(progress(1, 4), 0.0);
+        assert!((progress(2, 4) - 1.0 / 3.0).abs() < 1e-6);
+        assert_eq!(progress(4, 4), 1.0);
+    }
+
+    #[test]
+    fn a_lone_or_unknown_position_is_centred() {
+        assert_eq!(progress(1, 1), 0.5);
+        assert_eq!(progress(0, 0), 0.5);
+        assert_eq!(progress(0, 5), 0.5);
+    }
+
+    #[test]
+    fn an_out_of_range_position_stays_in_bounds() {
+        assert_eq!(progress(9, 4), 1.0);
     }
 
     #[test]
     fn each_output_reports_its_own_workspace_position() {
-        let facts = populated().facts();
-        assert_eq!(workspace_of(&facts, "DP-1"), (1, 3));
-        assert_eq!(workspace_of(&facts, "eDP-1"), (1, 2));
+        let drives = populated().drives(&everywhere(DEFAULTS));
+        assert_eq!(vertical_of(&drives, "DP-1"), 0.0, "workspace 1 of 3");
+        assert_eq!(vertical_of(&drives, "eDP-1"), 0.0, "workspace 1 of 2");
+    }
+
+    #[test]
+    fn the_horizontal_axis_is_centred_until_it_is_asked_for() {
+        let mut tracker = populated();
+        columns_with_gaps(&mut tracker);
+        feed(&mut tracker, r#"{"WindowFocusChanged":{"id":9}}"#);
+
+        assert_eq!(horizontal_of(&tracker.drives(&everywhere(DEFAULTS)), "DP-1"), 0.5);
+        assert_eq!(horizontal_of(&tracker.drives(&everywhere(BY_COLUMN)), "DP-1"), 1.0);
+    }
+
+    #[test]
+    fn one_output_may_follow_a_different_position_from_the_rest() {
+        let mut tracker = populated();
+        columns_with_gaps(&mut tracker);
+        feed(&mut tracker, r#"{"WindowFocusChanged":{"id":9}}"#);
+
+        let mut settings = everywhere(DEFAULTS);
+        settings.set_output(OutputId::new("DP-1"), BY_COLUMN);
+
+        let drives = tracker.drives(&settings);
+        assert_eq!(horizontal_of(&drives, "DP-1"), 1.0, "the last of three columns");
+        assert_eq!(horizontal_of(&drives, "eDP-1"), 0.5, "the others keep the global setting");
+    }
+
+    #[test]
+    fn an_axis_may_follow_either_position() {
+        let mut tracker = populated();
+        columns_with_gaps(&mut tracker);
+        feed(&mut tracker, r#"{"WindowFocusChanged":{"id":9}}"#);
+        let swapped = Params { vertical: Axis::Column, horizontal: Axis::Workspace };
+
+        let drives = tracker.drives(&everywhere(swapped));
+        assert_eq!(vertical_of(&drives, "DP-1"), 1.0, "the last of three columns");
+        assert_eq!(horizontal_of(&drives, "DP-1"), 0.0, "the first of three workspaces");
     }
 
     #[test]
@@ -301,9 +418,9 @@ mod tests {
         let mut tracker = populated();
         feed(&mut tracker, r#"{"WorkspaceActivated":{"id":5,"focused":true}}"#);
 
-        let facts = tracker.facts();
-        assert_eq!(workspace_of(&facts, "DP-1"), (3, 3), "DP-1 should have moved");
-        assert_eq!(workspace_of(&facts, "eDP-1"), (1, 2), "eDP-1 should be untouched");
+        let drives = tracker.drives(&everywhere(DEFAULTS));
+        assert_eq!(vertical_of(&drives, "DP-1"), 1.0, "DP-1 should have moved");
+        assert_eq!(vertical_of(&drives, "eDP-1"), 0.0, "eDP-1 should be untouched");
     }
 
     #[test]
@@ -311,65 +428,78 @@ mod tests {
         let mut tracker = populated();
         feed(&mut tracker, r#"{"WorkspaceActivated":{"id":3,"focused":true}}"#);
         feed(&mut tracker, r#"{"WorkspaceActivated":{"id":5,"focused":true}}"#);
-        assert_eq!(workspace_of(&tracker.facts(), "DP-1"), (3, 3));
+        assert_eq!(vertical_of(&tracker.drives(&everywhere(DEFAULTS)), "DP-1"), 1.0);
     }
 
     #[test]
-    fn focus_resolves_through_the_window_to_its_output() {
-        assert_eq!(focus_of(&populated().facts()), Some(OutputId::new("DP-1")));
+    fn every_output_is_told_whether_to_blur_and_only_one_is() {
+        let drives = populated().drives(&everywhere(DEFAULTS));
+        let told: Vec<&str> = drives
+            .iter()
+            .filter_map(|drive| match drive {
+                Drive::Blurred { output, .. } => Some(output.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(told, vec!["DP-1", "eDP-1"], "every output is told, not only the blurred one");
+        assert_eq!(blurred(&drives), vec!["DP-1"], "niri focuses one window, so one output");
     }
 
     #[test]
-    fn focusing_a_window_on_the_other_monitor_moves_the_focus() {
+    fn focusing_a_window_on_the_other_monitor_moves_the_blur() {
         let mut tracker = populated();
         feed(&mut tracker, r#"{"WindowFocusChanged":{"id":3}}"#);
-        assert_eq!(focus_of(&tracker.facts()), Some(OutputId::new("eDP-1")));
+        assert_eq!(blurred(&tracker.drives(&everywhere(DEFAULTS))), vec!["eDP-1"]);
     }
 
     #[test]
-    fn losing_focus_leaves_no_output_focused() {
+    fn losing_focus_leaves_every_output_sharp() {
         let mut tracker = populated();
         feed(&mut tracker, r#"{"WindowFocusChanged":{"id":null}}"#);
-        assert_eq!(focus_of(&tracker.facts()), None);
+        assert!(blurred(&tracker.drives(&everywhere(DEFAULTS))).is_empty());
     }
 
     #[test]
-    fn closing_the_focused_window_clears_the_focus() {
+    fn closing_the_focused_window_leaves_every_output_sharp() {
         let mut tracker = populated();
         feed(&mut tracker, r#"{"WindowClosed":{"id":4}}"#);
-        assert_eq!(focus_of(&tracker.facts()), None);
+        assert!(blurred(&tracker.drives(&everywhere(DEFAULTS))).is_empty());
     }
 
     #[test]
-    fn a_focused_window_on_no_workspace_focuses_no_output() {
+    fn a_focused_window_on_no_workspace_blurs_no_output() {
         let mut tracker = populated();
         feed(
             &mut tracker,
             r#"{"WindowOpenedOrChanged":{"window":
                 {"id":99,"workspace_id":null,"is_focused":true,"layout":{}}}}"#,
         );
-        assert_eq!(focus_of(&tracker.facts()), None);
+        assert!(blurred(&tracker.drives(&everywhere(DEFAULTS))).is_empty());
     }
 
     #[test]
-    fn the_overview_is_reported_globally() {
+    fn the_overview_reaches_every_output_with_the_same_value() {
         let mut tracker = populated();
+        assert_eq!(
+            zoomed_out(&tracker.drives(&everywhere(DEFAULTS))),
+            vec![("DP-1", false), ("eDP-1", false)]
+        );
+
         feed(&mut tracker, r#"{"OverviewOpenedOrClosed":{"is_open":true}}"#);
-        assert!(
-            tracker
-                .facts()
-                .iter()
-                .any(|event| matches!(event, CompositorEvent::OverviewToggled { active: true }))
+        assert_eq!(
+            zoomed_out(&tracker.drives(&everywhere(DEFAULTS))),
+            vec![("DP-1", true), ("eDP-1", true)]
         );
     }
 
     #[test]
     fn outputs_are_taken_from_the_workspace_list() {
-        let facts = populated().facts();
-        let outputs = facts
+        let drives = populated().drives(&everywhere(DEFAULTS));
+        let outputs = drives
             .iter()
-            .find_map(|event| match event {
-                CompositorEvent::OutputsChanged { outputs } => Some(outputs.clone()),
+            .find_map(|drive| match drive {
+                Drive::OutputsChanged { outputs } => Some(outputs.clone()),
                 _ => None,
             })
             .expect("outputs should be reported");
@@ -394,10 +524,14 @@ mod tests {
     fn columns_are_ranked_within_the_active_workspace() {
         let mut tracker = populated();
         columns_with_gaps(&mut tracker);
-        assert_eq!(columns_of(&tracker.facts(), "DP-1"), (1, 3), "gaps must not inflate it");
+        assert_eq!(
+            horizontal_of(&tracker.drives(&everywhere(BY_COLUMN)), "DP-1"),
+            0.0,
+            "gaps must not inflate the travel"
+        );
 
         feed(&mut tracker, r#"{"WindowFocusChanged":{"id":9}}"#);
-        assert_eq!(columns_of(&tracker.facts(), "DP-1"), (3, 3));
+        assert_eq!(horizontal_of(&tracker.drives(&everywhere(BY_COLUMN)), "DP-1"), 1.0);
     }
 
     #[test]
@@ -405,7 +539,7 @@ mod tests {
         let mut tracker = populated();
         columns_with_gaps(&mut tracker);
         feed(&mut tracker, r#"{"WindowFocusChanged":{"id":9}}"#);
-        assert_eq!(columns_of(&tracker.facts(), "DP-1"), (3, 3));
+        assert_eq!(horizontal_of(&tracker.drives(&everywhere(BY_COLUMN)), "DP-1"), 1.0);
 
         // Focus leaves for the other monitor. DP-1 has not scrolled, so it must not move.
         feed(
@@ -414,13 +548,14 @@ mod tests {
                 {"id":20,"workspace_id":2,"is_focused":true,
                  "layout":{"pos_in_scrolling_layout":[1,1]}}}}"#,
         );
-        assert_eq!(focus_of(&tracker.facts()), Some(OutputId::new("eDP-1")));
+        let drives = tracker.drives(&everywhere(BY_COLUMN));
+        assert_eq!(blurred(&drives), vec!["eDP-1"]);
         assert_eq!(
-            columns_of(&tracker.facts(), "DP-1"),
-            (3, 3),
-            "an unfocused output must keep its position rather than centring"
+            horizontal_of(&drives, "DP-1"),
+            1.0,
+            "an unblurred output must keep its position rather than centring"
         );
-        assert_eq!(columns_of(&tracker.facts(), "eDP-1"), (1, 1));
+        assert_eq!(horizontal_of(&drives, "eDP-1"), 0.5, "a lone column has nowhere to travel");
     }
 
     #[test]
@@ -428,7 +563,7 @@ mod tests {
         let mut tracker = populated();
         columns_with_gaps(&mut tracker);
         feed(&mut tracker, r#"{"WindowFocusChanged":{"id":8}}"#);
-        assert_eq!(columns_of(&tracker.facts(), "DP-1"), (2, 3));
+        assert_eq!(horizontal_of(&tracker.drives(&everywhere(BY_COLUMN)), "DP-1"), 0.5);
 
         // A floating window has no place in the scroll, so nothing has scrolled.
         feed(
@@ -436,7 +571,11 @@ mod tests {
             r#"{"WindowOpenedOrChanged":{"window":
                 {"id":50,"workspace_id":1,"is_focused":true,"layout":{}}}}"#,
         );
-        assert_eq!(columns_of(&tracker.facts(), "DP-1"), (2, 3), "a float must not recentre");
+        assert_eq!(
+            horizontal_of(&tracker.drives(&everywhere(BY_COLUMN)), "DP-1"),
+            0.5,
+            "a float must not recentre what has not moved"
+        );
     }
 
     #[test]
@@ -444,7 +583,7 @@ mod tests {
         let mut tracker = populated();
         columns_with_gaps(&mut tracker);
         feed(&mut tracker, r#"{"WindowFocusChanged":{"id":9}}"#);
-        assert_eq!(columns_of(&tracker.facts(), "DP-1"), (3, 3));
+        assert_eq!(horizontal_of(&tracker.drives(&everywhere(BY_COLUMN)), "DP-1"), 1.0);
 
         // The last column closes while the focus is elsewhere.
         feed(
@@ -458,14 +597,14 @@ mod tests {
                  "layout":{"pos_in_scrolling_layout":[1,1]}}]}}"#,
         );
         assert_eq!(
-            columns_of(&tracker.facts(), "DP-1"),
-            (2, 2),
-            "the nearest surviving column, not the centre"
+            horizontal_of(&tracker.drives(&everywhere(BY_COLUMN)), "DP-1"),
+            1.0,
+            "the nearest surviving column, which is now the last of two"
         );
     }
 
     #[test]
-    fn a_workspace_nothing_has_been_focused_on_reports_no_position() {
+    fn a_workspace_nothing_has_been_focused_on_reports_the_centre() {
         let mut tracker = Tracker::default();
         feed(
             &mut tracker,
@@ -480,18 +619,13 @@ mod tests {
                 {"id":9,"workspace_id":1,"is_focused":false,
                  "layout":{"pos_in_scrolling_layout":[2,1]}}]}}"#,
         );
-        assert_eq!(columns_of(&tracker.facts(), "DP-1"), (0, 2), "centred is the only answer");
+        assert_eq!(horizontal_of(&tracker.drives(&everywhere(BY_COLUMN)), "DP-1"), 0.5);
     }
 
     #[test]
-    fn an_empty_workspace_has_no_columns() {
+    fn an_empty_workspace_reports_the_centre() {
         let mut tracker = populated();
         feed(&mut tracker, r#"{"WindowsChanged":{"windows":[]}}"#);
-        let facts = tracker.facts();
-        assert!(
-            facts
-                .iter()
-                .any(|event| matches!(event, CompositorEvent::ColumnActive { count: 0, .. }))
-        );
+        assert_eq!(horizontal_of(&tracker.drives(&everywhere(BY_COLUMN)), "DP-1"), 0.5);
     }
 }

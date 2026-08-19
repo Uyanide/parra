@@ -8,16 +8,15 @@
 
 A wlr-layer-shell wallpaper daemon that supports compositor-driven effects:
 
-- **vertical parallax scrolling** that follows the workspace
-- **horizontal parallax scrolling** that follows the focusing column (disabled
-  by default)
-- **blurring and tinting** that follows window focus
-- **zoom-in/out** that follows overview's close/open
+- **vertical parallax scrolling**
+- **horizontal parallax scrolling**
+- **blurring and tinting**
+- **zoom-in/out**
 
 and behaves exactly as expected for this type of program:
 
 - **live wallpaper switching** without restarting or reinitializing the daemon
-- **transition effect** when switching
+- **transition effect** while switching
 - **automatic wallpaper restoration** at the next start
 - **configuration override** per monitor
 

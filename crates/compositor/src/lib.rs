@@ -1,7 +1,7 @@
 //! Compositor adaptation: the one place that knows how any particular compositor talks.
-
-// TODO: The current design is exclusively niri-shaped and NOT actually adaptable to
-//       other compositors.
+//!
+//! A backend turns whatever its compositor reports into the normalized channels of
+//! [`Drive`].
 
 pub mod backends;
 pub mod event;
@@ -10,7 +10,7 @@ use std::io;
 
 use thiserror::Error;
 
-pub use event::CompositorEvent;
+pub use event::Drive;
 
 #[derive(Debug, Error)]
 pub enum BackendError {
@@ -26,7 +26,7 @@ pub enum BackendError {
     Protocol { backend: &'static str, message: String },
 }
 
-/// A source of normalized compositor facts.
+/// A driver for the wallpaper's animated channels, fed by one compositor.
 ///
 /// [`CompositorBackend::run`] blocks, so the daemon gives each backend a thread and
 /// receives events through the sink. Reconnection therefore stays with the protocol
@@ -38,12 +38,12 @@ pub trait CompositorBackend: Send {
     fn run(&mut self, sink: &dyn EventSink) -> Result<(), BackendError>;
 }
 
-/// Where a backend delivers what it observed, implemented by the daemon over its event
+/// Where a backend delivers what it drives, implemented by the daemon over its event
 /// loop.
 ///
 /// Only ever used from the backend's own thread, so it carries no thread-safety bound.
 pub trait EventSink {
-    fn emit(&self, event: CompositorEvent);
+    fn emit(&self, event: Drive);
 
     /// False once the daemon is shutting down; a backend should return from `run`.
     fn is_open(&self) -> bool;

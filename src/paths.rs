@@ -3,9 +3,6 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-/// Filename inside the config directory.
-pub const CONFIG_FILE: &str = "config.toml";
-
 /// Filename inside the state directory.
 pub const STATE_FILE: &str = "state.toml";
 
@@ -32,7 +29,11 @@ impl PathError {
 /// Everywhere the program touches the filesystem, derived from the name it was given.
 #[derive(Clone, Debug)]
 pub struct Paths {
-    pub config: PathBuf,
+    /// Where the per-backend config files live. Also what relative paths resolve against
+    /// on a run that reads no file at all.
+    pub config_dir: PathBuf,
+    /// An explicit `--config`, which wins over the per-backend file.
+    config_override: Option<PathBuf>,
     pub socket: PathBuf,
     /// Which wallpaper each slot was last asked for.
     pub state: PathBuf,
@@ -53,10 +54,8 @@ impl Paths {
     /// Applies explicit overrides on top of the derived defaults.
     pub fn resolve(name: &str, overrides: Overrides) -> Result<Self, PathError> {
         Ok(Self {
-            config: match overrides.config {
-                Some(path) => path,
-                None => config_file(name)?,
-            },
+            config_dir: config_dir(name)?,
+            config_override: overrides.config,
             socket: match overrides.socket {
                 Some(path) => path,
                 None => socket_path(name)?,
@@ -71,14 +70,25 @@ impl Paths {
             },
         })
     }
+
+    /// The file belonging to the compositor in use, unless `--config` named another.
+    ///
+    /// `None` when there is no backend to name a file after.
+    pub fn config(&self, backend: Option<&str>) -> Option<PathBuf> {
+        match (&self.config_override, backend) {
+            (Some(path), _) => Some(path.clone()),
+            (None, Some(backend)) => Some(self.config_dir.join(format!("{backend}.toml"))),
+            (None, None) => None,
+        }
+    }
 }
 
-/// `$XDG_CONFIG_HOME/<name>/config.toml`, falling back to `$HOME/.config`.
-pub fn config_file(name: &str) -> Result<PathBuf, PathError> {
+/// `$XDG_CONFIG_HOME/<name>`, falling back to `$HOME/.config`.
+pub fn config_dir(name: &str) -> Result<PathBuf, PathError> {
     let base = base_dir("XDG_CONFIG_HOME", ".config").ok_or_else(|| {
         PathError::new("neither XDG_CONFIG_HOME nor HOME is set", "the config file")
     })?;
-    Ok(base.join(name).join(CONFIG_FILE))
+    Ok(base.join(name))
 }
 
 /// `$XDG_STATE_HOME/<name>/state.toml`, falling back to `$HOME/.local/state`.

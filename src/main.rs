@@ -21,7 +21,7 @@ struct Cli {
         long,
         global = true,
         value_name = "PATH",
-        help = concat!("Config file [default: $XDG_CONFIG_HOME/", env!("CARGO_PKG_NAME"), "/config.toml]")
+        help = concat!("Config file [default: $XDG_CONFIG_HOME/", env!("CARGO_PKG_NAME"), "/<compositor>.toml]")
     )]
     config: Option<PathBuf>,
 

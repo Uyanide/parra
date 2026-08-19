@@ -13,7 +13,7 @@ pub mod server;
 
 pub use client::{Client, ClientError, Subscription};
 pub use protocol::{
-    BlurSnapshot, Event, GpuSnapshot, IndexSnapshot, Micros, OutputSnapshot, PROTOCOL_VERSION,
+    BlurSnapshot, ChannelSnapshot, Event, GpuSnapshot, Micros, OutputSnapshot, PROTOCOL_VERSION,
     Property, Request, Response, ScrollSnapshot, StateSnapshot, Tween, Values,
 };
 pub use server::{Handler, Server, ServerError, Subscriber, Subscribers};

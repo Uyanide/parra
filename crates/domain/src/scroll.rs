@@ -1,8 +1,6 @@
 use crate::anim::{Animated, Motion};
 
 /// Parallax position on both axes, normalized to `0..=1` of the available travel.
-///
-/// The vertical axis follows the workspace, the horizontal one the column.
 #[derive(Clone, Copy, Debug)]
 pub struct ScrollState {
     pub v: Animated,

@@ -32,6 +32,16 @@ pub struct Loaded {
     pub from_file: bool,
 }
 
+/// The configuration a run with no file at all uses.
+///
+/// Reached when no compositor backend was detected, so no file applied.
+pub fn defaults(default_namespace: &str, base_dir: &Path) -> Config {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let ctx = Context { default_namespace, base_dir, home: home.as_deref() };
+    merge::resolve(&ConfigFile::default(), &ctx)
+        .expect("a file with no keys in it cannot hold an invalid value")
+}
+
 pub fn load(path: &Path, default_namespace: &str) -> Result<Loaded, ConfigError> {
     let text = match fs::read_to_string(path) {
         Ok(text) => Some(text),

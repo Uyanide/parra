@@ -5,57 +5,48 @@ use crate::params::{AxisParams, OutputParams};
 use crate::scroll::ScrollState;
 use crate::wallpaper::WallpaperRef;
 
-/// A position within a one-based sequence the compositor exposes, such as the active
-/// workspace among that output's workspaces. `count == 0` means "not reported yet".
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Index {
-    pub idx: u32,
-    pub count: u32,
+/// What the compositor drives on one output, before any configuration is applied.
+///
+/// Positions are normalized to `0..=1` of the available travel, and an axis the
+/// compositor does not drive sits centred.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Channels {
+    pub scroll_x: f32,
+    pub scroll_y: f32,
+    pub blur: bool,
+    pub zoom_out: bool,
 }
 
-impl Index {
-    pub const UNKNOWN: Index = Index { idx: 0, count: 0 };
-
-    pub fn new(idx: u32, count: u32) -> Self {
-        Self { idx, count }
+impl Channels {
+    /// One reported position, brought into range. NaN differs from itself, so left alone
+    /// it would look like movement on every report.
+    pub fn position(reported: f32) -> f32 {
+        if reported.is_nan() { ScrollState::CENTRE } else { reported.clamp(0.0, 1.0) }
     }
+}
 
-    /// Maps the position onto `0..=1`. A lone or not-yet-known position sits centred,
-    /// which is the only neutral answer when there is nothing to travel between.
-    pub fn progress(self) -> f32 {
-        if self.count <= 1 || self.idx == 0 {
-            return ScrollState::CENTRE;
+impl Default for Channels {
+    /// Centred and idle, which is where an output sits until a backend says otherwise.
+    fn default() -> Self {
+        Self {
+            scroll_x: ScrollState::CENTRE,
+            scroll_y: ScrollState::CENTRE,
+            blur: false,
+            zoom_out: false,
         }
-        let position = self.idx.min(self.count) - 1;
-        position as f32 / (self.count - 1) as f32
     }
 }
 
-/// What the compositor reports about one output.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct OutputFacts {
-    pub workspace: Index,
-    /// Position in the scrolling layout.
-    pub column: Index,
-}
-
-// TODO: This is exclusively niri-shaped and NOT normalized across backends.
-/// The compositor's view of the world.
+/// Every output a compositor backend is driving.
 #[derive(Clone, Debug, Default)]
-pub struct Facts {
-    /// Output holding the focused window, if any. Focus is global, so at most one.
-    pub focused_output: Option<OutputId>,
-    pub overview_active: bool,
-    pub outputs: BTreeMap<OutputId, OutputFacts>,
+pub struct Driven {
+    pub outputs: BTreeMap<OutputId, Channels>,
 }
 
-impl Facts {
-    pub fn output(&self, id: &OutputId) -> OutputFacts {
+impl Driven {
+    /// An output nothing has been reported for reads as the neutral position.
+    pub fn output(&self, id: &OutputId) -> Channels {
         self.outputs.get(id).copied().unwrap_or_default()
-    }
-
-    pub fn is_focused(&self, id: &OutputId) -> bool {
-        self.focused_output.as_ref() == Some(id)
     }
 }
 
@@ -133,26 +124,24 @@ pub struct Targets {
     pub zoom: f32,
 }
 
-// TODO: Refactor into a more flexible system that does not hardcode the bindings between
-//       facts, signals and params.
-/// The one place where facts, external signals and configuration become intent.
+/// The one place driven channels, external signals and configuration become intent.
 ///
-/// It lives here because some targets, blur among them, combine signals from several
+/// It lives here because some targets, blur among them, combine sources from several
 /// crates at once, so none of those crates could resolve them alone.
 pub fn resolve(
     output: &OutputId,
-    facts: &Facts,
+    driven: &Driven,
     signals: &Signals,
     params: &OutputParams,
 ) -> Targets {
-    let output_facts = facts.output(output);
-    let blur_on = params.blur.is_enabled() && (facts.is_focused(output) || signals.blur(output));
+    let channels = driven.output(output);
+    let blur_on = params.blur.is_enabled() && (channels.blur || signals.blur(output));
 
     Targets {
-        scroll_v: axis(output_facts.workspace, &params.scroll.vertical),
-        scroll_h: axis(output_facts.column, &params.scroll.horizontal),
+        scroll_v: axis(channels.scroll_y, &params.scroll.vertical),
+        scroll_h: axis(channels.scroll_x, &params.scroll.horizontal),
         blur: if blur_on { 1.0 } else { 0.0 },
-        zoom: if facts.overview_active { 1.0 } else { params.overview.zoom() },
+        zoom: if channels.zoom_out { 1.0 } else { params.zoom.factor() },
     }
 }
 
@@ -170,13 +159,10 @@ pub fn wallpaper_for<'a>(
     signals.wallpaper(output).or(params.fallback.as_ref())
 }
 
-/// Scales the excursion about the centre rather than the raw progress, so a strength
-/// below 1 shortens the travel symmetrically instead of biasing it toward one edge.
-fn axis(index: Index, params: &AxisParams) -> f32 {
-    if !params.enabled {
-        return ScrollState::CENTRE;
-    }
-    let offset = index.progress() - ScrollState::CENTRE;
+/// Scales the excursion about the centre rather than the raw position, so a travel below
+/// 1 shortens the movement symmetrically instead of biasing it toward one edge.
+fn axis(position: f32, params: &AxisParams) -> f32 {
+    let offset = position - ScrollState::CENTRE;
     (ScrollState::CENTRE + offset * params.travel).clamp(0.0, 1.0)
 }
 
@@ -185,29 +171,17 @@ mod tests {
     use super::*;
     use crate::params::BlurParams;
 
-    const EPS: f32 = 1e-6;
-
     fn output(name: &str) -> OutputId {
         OutputId::new(name)
     }
 
-    #[test]
-    fn progress_spans_the_sequence() {
-        assert_eq!(Index::new(1, 4).progress(), 0.0);
-        assert!((Index::new(2, 4).progress() - 1.0 / 3.0).abs() < EPS);
-        assert_eq!(Index::new(4, 4).progress(), 1.0);
-    }
-
-    #[test]
-    fn a_lone_or_unknown_position_is_centred() {
-        assert_eq!(Index::new(1, 1).progress(), 0.5);
-        assert_eq!(Index::UNKNOWN.progress(), 0.5);
-        assert_eq!(Index::new(0, 5).progress(), 0.5);
-    }
-
-    #[test]
-    fn an_out_of_range_index_stays_in_bounds() {
-        assert_eq!(Index::new(9, 4).progress(), 1.0);
+    /// One output driven to the given channels, beside a second left at its neutral
+    /// position for every case here to check against.
+    fn driven(id: &OutputId, channels: Channels) -> Driven {
+        let mut driven = Driven::default();
+        driven.outputs.insert(id.clone(), channels);
+        driven.outputs.insert(output("untouched"), Channels::default());
+        driven
     }
 
     fn travel(travel: f32) -> AxisParams {
@@ -215,64 +189,83 @@ mod tests {
     }
 
     #[test]
-    fn strength_shortens_the_travel_about_the_centre() {
-        assert_eq!(axis(Index::new(1, 3), &travel(1.0)), 0.0);
-        assert_eq!(axis(Index::new(1, 3), &travel(0.5)), 0.25);
-        assert_eq!(axis(Index::new(3, 3), &travel(0.5)), 0.75);
-        assert_eq!(axis(Index::new(1, 3), &travel(0.0)), 0.5);
+    fn an_undriven_output_sits_at_the_centre() {
+        let channels = Channels::default();
+        assert_eq!(channels.scroll_x, 0.5);
+        assert_eq!(channels.scroll_y, 0.5);
+        assert_eq!(Driven::default().output(&output("DP-1")), channels);
     }
 
     #[test]
-    fn disabling_an_axis_pins_it_to_the_centre() {
-        let params = AxisParams { enabled: false, ..AxisParams::default() };
-        assert_eq!(axis(Index::new(1, 3), &params), 0.5);
+    fn travel_shortens_the_movement_about_the_centre() {
+        assert_eq!(axis(0.0, &travel(1.0)), 0.0);
+        assert_eq!(axis(0.0, &travel(0.5)), 0.25);
+        assert_eq!(axis(1.0, &travel(0.5)), 0.75);
+        assert_eq!(axis(0.0, &travel(0.0)), 0.5, "no travel pins the axis to the centre");
     }
 
     #[test]
-    fn the_horizontal_axis_is_off_until_it_is_asked_for() {
-        let mut facts = Facts::default();
-        facts.outputs.insert(
-            output("DP-1"),
-            OutputFacts { column: Index::new(1, 3), ..OutputFacts::default() },
-        );
-        let signals = Signals::default();
-        let mut params = OutputParams::default();
+    fn each_axis_follows_its_own_channel() {
+        let id = output("DP-1");
+        let driven = driven(&id, Channels { scroll_x: 1.0, scroll_y: 0.0, ..Channels::default() });
+        let targets = resolve(&id, &driven, &Signals::default(), &OutputParams::default());
 
-        assert_eq!(resolve(&output("DP-1"), &facts, &signals, &params).scroll_h, 0.5);
-
-        params.scroll.horizontal.enabled = true;
-        assert_eq!(resolve(&output("DP-1"), &facts, &signals, &params).scroll_h, 0.0);
+        assert_eq!(targets.scroll_v, 0.0, "the vertical axis follows scroll_y");
+        assert_eq!(targets.scroll_h, 1.0, "the horizontal axis follows scroll_x");
     }
 
     #[test]
-    fn only_the_focused_output_blurs() {
-        let mut facts = Facts { focused_output: Some(output("DP-1")), ..Facts::default() };
-        facts.outputs.insert(output("DP-1"), OutputFacts::default());
-        facts.outputs.insert(output("eDP-1"), OutputFacts::default());
+    fn only_the_output_driven_to_blur_blurs() {
+        let id = output("DP-1");
+        let driven = driven(&id, Channels { blur: true, ..Channels::default() });
         let signals = Signals::default();
         let params = OutputParams::default();
 
-        assert_eq!(resolve(&output("DP-1"), &facts, &signals, &params).blur, 1.0);
-        assert_eq!(resolve(&output("eDP-1"), &facts, &signals, &params).blur, 0.0);
+        assert_eq!(resolve(&id, &driven, &signals, &params).blur, 1.0);
+        assert_eq!(resolve(&output("untouched"), &driven, &signals, &params).blur, 0.0);
     }
 
     #[test]
-    fn nothing_focused_leaves_every_output_sharp() {
-        let facts = Facts::default();
+    fn only_the_output_driven_to_zoom_out_zooms_out() {
+        let id = output("DP-1");
+        let driven = driven(&id, Channels { zoom_out: true, ..Channels::default() });
         let signals = Signals::default();
         let params = OutputParams::default();
-        assert_eq!(resolve(&output("DP-1"), &facts, &signals, &params).blur, 0.0);
+
+        assert_eq!(resolve(&id, &driven, &signals, &params).zoom, 1.0);
+        assert!(resolve(&output("untouched"), &driven, &signals, &params).zoom > 1.0);
     }
 
     #[test]
-    fn an_external_signal_blurs_an_unfocused_output() {
-        let facts = Facts::default();
+    fn nothing_driven_leaves_every_output_sharp() {
+        let driven = Driven::default();
+        let params = OutputParams::default();
+        assert_eq!(resolve(&output("DP-1"), &driven, &Signals::default(), &params).blur, 0.0);
+    }
+
+    #[test]
+    fn an_external_signal_blurs_an_undriven_output() {
+        let driven = Driven::default();
         let mut signals = Signals::default();
         signals.set_blur(Some(output("eDP-1")), true);
         let params = OutputParams::default();
 
-        assert_eq!(resolve(&output("eDP-1"), &facts, &signals, &params).blur, 1.0);
-        assert_eq!(resolve(&output("DP-1"), &facts, &signals, &params).blur, 0.0);
+        assert_eq!(resolve(&output("eDP-1"), &driven, &signals, &params).blur, 1.0);
+        assert_eq!(resolve(&output("DP-1"), &driven, &signals, &params).blur, 0.0);
+    }
+
+    #[test]
+    fn a_zero_radius_disables_blur_entirely() {
+        let id = output("DP-1");
+        let driven = driven(&id, Channels { blur: true, ..Channels::default() });
+        let mut signals = Signals::default();
+        signals.set_blur(None, true);
+        let params = OutputParams {
+            blur: BlurParams { radius: 0, ..BlurParams::default() },
+            ..Default::default()
+        };
+
+        assert_eq!(resolve(&id, &driven, &signals, &params).blur, 0.0);
     }
 
     #[test]
@@ -405,48 +398,5 @@ mod tests {
 
         assert_eq!(signals.wallpaper(&output("DP-1")), None);
         assert_eq!(signals.wallpaper(&output("eDP-1")), Some(&kept));
-    }
-
-    #[test]
-    fn a_zero_radius_disables_blur_entirely() {
-        let facts = Facts { focused_output: Some(output("DP-1")), ..Facts::default() };
-        let mut signals = Signals::default();
-        signals.set_blur(None, true);
-        let params = OutputParams {
-            blur: BlurParams { radius: 0, ..BlurParams::default() },
-            ..Default::default()
-        };
-
-        assert_eq!(resolve(&output("DP-1"), &facts, &signals, &params).blur, 0.0);
-    }
-
-    #[test]
-    fn the_overview_zooms_back_out() {
-        let params = OutputParams::default();
-        let signals = Signals::default();
-
-        let closed = Facts::default();
-        assert!(resolve(&output("DP-1"), &closed, &signals, &params).zoom > 1.0);
-
-        let open = Facts { overview_active: true, ..Facts::default() };
-        assert_eq!(resolve(&output("DP-1"), &open, &signals, &params).zoom, 1.0);
-    }
-
-    #[test]
-    fn each_output_scrolls_by_its_own_workspace() {
-        let mut facts = Facts::default();
-        facts.outputs.insert(
-            output("DP-1"),
-            OutputFacts { workspace: Index::new(1, 3), ..OutputFacts::default() },
-        );
-        facts.outputs.insert(
-            output("eDP-1"),
-            OutputFacts { workspace: Index::new(3, 3), ..OutputFacts::default() },
-        );
-        let signals = Signals::default();
-        let params = OutputParams::default();
-
-        assert_eq!(resolve(&output("DP-1"), &facts, &signals, &params).scroll_v, 0.0);
-        assert_eq!(resolve(&output("eDP-1"), &facts, &signals, &params).scroll_v, 1.0);
     }
 }

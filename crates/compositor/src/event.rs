@@ -1,52 +1,49 @@
-use domain::{Facts, Index, OutputId};
+use domain::{Channels, Driven, OutputId};
 
-/// Facts.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CompositorEvent {
+/// One thing a compositor backend drives, already normalized.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Drive {
     /// The full set of outputs the compositor knows about. Only the set is consumed:
     /// geometry comes from Wayland, so that it has exactly one source.
     OutputsChanged {
         outputs: Vec<OutputId>,
     },
-    /// Which output holds the focused window, if any. Focus is global, so at most one.
-    FocusMoved {
-        output: Option<OutputId>,
-    },
-    WorkspaceActive {
+    /// Where this output's wallpaper sits, each axis normalized to `0..=1`, with `0.5`
+    /// for an axis the backend does not drive. Anything else is brought into range.
+    Scrolled {
         output: OutputId,
-        idx: u32,
-        count: u32,
+        x: f32,
+        y: f32,
     },
-    /// Position in the scrolling layout, which drives the horizontal axis.
-    ColumnActive {
+    Blurred {
         output: OutputId,
-        idx: u32,
-        count: u32,
+        on: bool,
     },
-    OverviewToggled {
-        active: bool,
+    ZoomedOut {
+        output: OutputId,
+        on: bool,
     },
 }
 
-impl CompositorEvent {
+impl Drive {
     /// Folds the event into the accumulated view of the world. Returns whether anything
     /// actually changed, so a repeated event costs no re-resolve and no frame.
-    pub fn apply_to(&self, facts: &mut Facts) -> bool {
+    pub fn apply_to(&self, driven: &mut Driven) -> bool {
         match self {
-            CompositorEvent::OutputsChanged { outputs } => apply_outputs(facts, outputs),
-            CompositorEvent::FocusMoved { output } => {
-                replace(&mut facts.focused_output, output.clone())
+            Drive::OutputsChanged { outputs } => apply_outputs(driven, outputs),
+            Drive::Scrolled { output, x, y } => {
+                let entry = driven.outputs.entry(output.clone()).or_default();
+                let moved_x = replace(&mut entry.scroll_x, Channels::position(*x));
+                let moved_y = replace(&mut entry.scroll_y, Channels::position(*y));
+                moved_x || moved_y
             }
-            CompositorEvent::WorkspaceActive { output, idx, count } => {
-                let entry = facts.outputs.entry(output.clone()).or_default();
-                replace(&mut entry.workspace, Index::new(*idx, *count))
+            Drive::Blurred { output, on } => {
+                let entry = driven.outputs.entry(output.clone()).or_default();
+                replace(&mut entry.blur, *on)
             }
-            CompositorEvent::ColumnActive { output, idx, count } => {
-                let entry = facts.outputs.entry(output.clone()).or_default();
-                replace(&mut entry.column, Index::new(*idx, *count))
-            }
-            CompositorEvent::OverviewToggled { active } => {
-                replace(&mut facts.overview_active, *active)
+            Drive::ZoomedOut { output, on } => {
+                let entry = driven.outputs.entry(output.clone()).or_default();
+                replace(&mut entry.zoom_out, *on)
             }
         }
     }
@@ -54,20 +51,16 @@ impl CompositorEvent {
 
 /// Adds what is new and forgets what is gone, leaving surviving outputs untouched so a
 /// hotplug elsewhere does not reset their positions.
-fn apply_outputs(facts: &mut Facts, outputs: &[OutputId]) -> bool {
-    let before = facts.outputs.len();
-    facts.outputs.retain(|id, _| outputs.contains(id));
-    let mut changed = facts.outputs.len() != before;
+fn apply_outputs(driven: &mut Driven, outputs: &[OutputId]) -> bool {
+    let before = driven.outputs.len();
+    driven.outputs.retain(|id, _| outputs.contains(id));
+    let mut changed = driven.outputs.len() != before;
 
     for id in outputs {
-        if !facts.outputs.contains_key(id) {
-            facts.outputs.insert(id.clone(), Default::default());
+        if !driven.outputs.contains_key(id) {
+            driven.outputs.insert(id.clone(), Channels::default());
             changed = true;
         }
-    }
-    if facts.focused_output.as_ref().is_some_and(|id| !facts.outputs.contains_key(id)) {
-        facts.focused_output = None;
-        changed = true;
     }
     changed
 }
@@ -88,91 +81,111 @@ mod tests {
         OutputId::new(name)
     }
 
+    fn scrolled(name: &str, x: f32, y: f32) -> Drive {
+        Drive::Scrolled { output: output(name), x, y }
+    }
+
     #[test]
     fn a_repeated_event_reports_no_change() {
-        let mut facts = Facts::default();
-        let event = CompositorEvent::WorkspaceActive { output: output("DP-1"), idx: 2, count: 4 };
-        assert!(event.apply_to(&mut facts));
-        assert!(!event.apply_to(&mut facts));
+        let mut driven = Driven::default();
+        let event = scrolled("DP-1", 0.25, 0.75);
+        assert!(event.apply_to(&mut driven));
+        assert!(!event.apply_to(&mut driven));
     }
 
     #[test]
-    fn workspaces_are_tracked_per_output() {
-        let mut facts = Facts::default();
-        CompositorEvent::WorkspaceActive { output: output("DP-1"), idx: 1, count: 3 }
-            .apply_to(&mut facts);
-        CompositorEvent::WorkspaceActive { output: output("eDP-1"), idx: 3, count: 3 }
-            .apply_to(&mut facts);
-
-        assert_eq!(facts.output(&output("DP-1")).workspace, Index::new(1, 3));
-        assert_eq!(facts.output(&output("eDP-1")).workspace, Index::new(3, 3));
+    fn one_axis_moving_is_still_a_change() {
+        let mut driven = Driven::default();
+        scrolled("DP-1", 0.25, 0.75).apply_to(&mut driven);
+        assert!(scrolled("DP-1", 0.25, 0.5).apply_to(&mut driven));
     }
 
     #[test]
-    fn focus_is_exclusive() {
-        let mut facts = Facts::default();
-        CompositorEvent::FocusMoved { output: Some(output("DP-1")) }.apply_to(&mut facts);
-        assert!(facts.is_focused(&output("DP-1")));
+    fn a_position_outside_the_range_is_brought_into_it() {
+        let mut driven = Driven::default();
+        scrolled("DP-1", -3.0, 42.0).apply_to(&mut driven);
 
-        CompositorEvent::FocusMoved { output: Some(output("eDP-1")) }.apply_to(&mut facts);
-        assert!(!facts.is_focused(&output("DP-1")));
-        assert!(facts.is_focused(&output("eDP-1")));
+        assert_eq!(driven.output(&output("DP-1")).scroll_x, 0.0);
+        assert_eq!(driven.output(&output("DP-1")).scroll_y, 1.0);
+    }
 
-        CompositorEvent::FocusMoved { output: None }.apply_to(&mut facts);
-        assert!(!facts.is_focused(&output("eDP-1")));
+    #[test]
+    fn a_position_that_is_not_a_number_reads_as_centred() {
+        let mut driven = Driven::default();
+        let event = scrolled("DP-1", f32::NAN, 0.25);
+
+        assert!(event.apply_to(&mut driven));
+        assert_eq!(driven.output(&output("DP-1")).scroll_x, Channels::default().scroll_x);
+        assert!(!event.apply_to(&mut driven), "a value differing from itself is not movement");
+    }
+
+    #[test]
+    fn positions_are_tracked_per_output() {
+        let mut driven = Driven::default();
+        scrolled("DP-1", 0.0, 0.25).apply_to(&mut driven);
+        scrolled("eDP-1", 1.0, 0.75).apply_to(&mut driven);
+
+        assert_eq!(driven.output(&output("DP-1")).scroll_x, 0.0);
+        assert_eq!(driven.output(&output("DP-1")).scroll_y, 0.25);
+        assert_eq!(driven.output(&output("eDP-1")).scroll_x, 1.0);
+        assert_eq!(driven.output(&output("eDP-1")).scroll_y, 0.75);
+    }
+
+    #[test]
+    fn blur_is_tracked_per_output() {
+        let mut driven = Driven::default();
+        Drive::Blurred { output: output("DP-1"), on: true }.apply_to(&mut driven);
+        Drive::Blurred { output: output("eDP-1"), on: true }.apply_to(&mut driven);
+
+        assert!(driven.output(&output("DP-1")).blur, "two blurred outputs are representable");
+        assert!(driven.output(&output("eDP-1")).blur);
+    }
+
+    #[test]
+    fn zooming_out_is_tracked_per_output() {
+        let mut driven = Driven::default();
+        Drive::ZoomedOut { output: output("DP-1"), on: true }.apply_to(&mut driven);
+
+        assert!(driven.output(&output("DP-1")).zoom_out);
+        assert!(!driven.output(&output("eDP-1")).zoom_out, "one output zooming does not zoom both");
     }
 
     #[test]
     fn a_vanished_output_is_forgotten() {
-        let mut facts = Facts::default();
-        let both =
-            CompositorEvent::OutputsChanged { outputs: vec![output("DP-1"), output("eDP-1")] };
-        both.apply_to(&mut facts);
-        CompositorEvent::WorkspaceActive { output: output("DP-1"), idx: 2, count: 4 }
-            .apply_to(&mut facts);
+        let mut driven = Driven::default();
+        let both = Drive::OutputsChanged { outputs: vec![output("DP-1"), output("eDP-1")] };
+        both.apply_to(&mut driven);
+        scrolled("DP-1", 0.0, 0.25).apply_to(&mut driven);
 
-        let one = CompositorEvent::OutputsChanged { outputs: vec![output("eDP-1")] };
-        assert!(one.apply_to(&mut facts));
-        assert!(!facts.outputs.contains_key(&output("DP-1")));
-        assert!(facts.outputs.contains_key(&output("eDP-1")));
-    }
-
-    #[test]
-    fn unplugging_the_focused_output_clears_focus() {
-        let mut facts = Facts::default();
-        CompositorEvent::OutputsChanged { outputs: vec![output("DP-1"), output("eDP-1")] }
-            .apply_to(&mut facts);
-        CompositorEvent::FocusMoved { output: Some(output("DP-1")) }.apply_to(&mut facts);
-
-        CompositorEvent::OutputsChanged { outputs: vec![output("eDP-1")] }.apply_to(&mut facts);
-        assert_eq!(facts.focused_output, None);
+        let one = Drive::OutputsChanged { outputs: vec![output("eDP-1")] };
+        assert!(one.apply_to(&mut driven));
+        assert!(!driven.outputs.contains_key(&output("DP-1")));
+        assert!(driven.outputs.contains_key(&output("eDP-1")));
     }
 
     #[test]
     fn an_unchanged_output_set_reports_no_change() {
-        let mut facts = Facts::default();
-        let event = CompositorEvent::OutputsChanged { outputs: vec![output("DP-1")] };
-        assert!(event.apply_to(&mut facts));
-        assert!(!event.apply_to(&mut facts));
+        let mut driven = Driven::default();
+        let event = Drive::OutputsChanged { outputs: vec![output("DP-1")] };
+        assert!(event.apply_to(&mut driven));
+        assert!(!event.apply_to(&mut driven));
     }
 
     #[test]
     fn rediscovering_an_output_keeps_its_position() {
-        let mut facts = Facts::default();
-        let event = CompositorEvent::OutputsChanged { outputs: vec![output("DP-1")] };
-        event.apply_to(&mut facts);
-        CompositorEvent::WorkspaceActive { output: output("DP-1"), idx: 2, count: 4 }
-            .apply_to(&mut facts);
-        event.apply_to(&mut facts);
+        let mut driven = Driven::default();
+        let event = Drive::OutputsChanged { outputs: vec![output("DP-1")] };
+        event.apply_to(&mut driven);
+        scrolled("DP-1", 0.0, 0.25).apply_to(&mut driven);
+        event.apply_to(&mut driven);
 
-        assert_eq!(facts.output(&output("DP-1")).workspace, Index::new(2, 4));
+        assert_eq!(driven.output(&output("DP-1")).scroll_y, 0.25);
     }
 
     #[test]
-    fn the_overview_is_global() {
-        let mut facts = Facts::default();
-        assert!(CompositorEvent::OverviewToggled { active: true }.apply_to(&mut facts));
-        assert!(facts.overview_active);
-        assert!(!CompositorEvent::OverviewToggled { active: true }.apply_to(&mut facts));
+    fn an_output_appearing_starts_from_the_neutral_position() {
+        let mut driven = Driven::default();
+        Drive::OutputsChanged { outputs: vec![output("DP-1")] }.apply_to(&mut driven);
+        assert_eq!(driven.output(&output("DP-1")), Channels::default());
     }
 }

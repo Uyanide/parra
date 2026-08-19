@@ -218,7 +218,7 @@ impl Renderer {
         for state in states.values() {
             let needed = decode::needed_size(
                 state.buffer_size(),
-                state.params.overview.zoom(),
+                state.params.zoom.factor(),
                 self.gl.max_texture_size(),
             );
             if let Some(wallpaper) = state.wallpaper.current() {

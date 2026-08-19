@@ -1,5 +1,5 @@
 //! The state model the rest of the daemon agrees on, and the policy that turns
-//! compositor facts into animation targets.
+//! driven channels into animation targets.
 
 pub mod anim;
 pub mod blur;
@@ -20,10 +20,10 @@ pub use geometry::{UvRect, sample_rect};
 pub use monitor::{MonitorState, Moves};
 pub use output::{LogicalSize, OutputId, PixelSize, SCALE_DENOMINATOR, Scale};
 pub use params::{
-    AxisParams, BlurParams, Layer, OutputParams, OverviewParams, ScrollParams, SurfaceParams,
-    TransitionMode, TransitionParams,
+    AxisParams, BlurParams, Layer, OutputParams, ScrollParams, SurfaceParams, TransitionMode,
+    TransitionParams, ZoomParams,
 };
-pub use policy::{Facts, Index, OutputFacts, Signals, Targets, wallpaper_for};
+pub use policy::{Channels, Driven, Signals, Targets, wallpaper_for};
 pub use scroll::ScrollState;
 pub use wallpaper::{Swap, WallpaperRef, WallpaperSlot};
 pub use zoom::ZoomState;

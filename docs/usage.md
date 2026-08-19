@@ -114,7 +114,7 @@ behind. Three of niri's animations have a counterpart here:
 | -------------------------- | --------------------- | ------------------------------------- |
 | `workspace-switch`         | `[scroll.vertical]`   | Vertical parallax                     |
 | `horizontal-view-movement` | `[scroll.horizontal]` | Horizontal parallax, if you enable it |
-| `overview-open-close`      | `[overview]`          | Zoom                                  |
+| `overview-open-close`      | `[zoom]`              | Zoom                                  |
 
 Each parallax axis carries its own `duration-ms` and `easing` for exactly this reason:
 niri's two animations are separate, and their defaults differ.
@@ -186,12 +186,12 @@ spawn-at-startup "parra" "daemon"
 > built-in defaults are a working configuration. Only create the configuration file
 > when one is needed.
 
-parra reads `$XDG_CONFIG_HOME/parra/config.toml`, falling back to
-`~/.config/parra/config.toml`.
+parra reads one file per compositor, and under niri that is
+`$XDG_CONFIG_HOME/parra/niri.toml`, falling back to `~/.config/parra/niri.toml`.
 
 ```sh
 mkdir -p ~/.config/parra
-cp config.example.toml ~/.config/parra/config.toml   # from the repository root
+cp niri.example.toml ~/.config/parra/niri.toml   # from the repository root
 ```
 
 Every key and its default is in [config.md](config.md). Check a file before restarting

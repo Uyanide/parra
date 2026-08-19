@@ -644,6 +644,7 @@ dependencies = [
  "serde_json",
  "store",
  "thiserror",
+ "toml",
  "tracing",
  "tracing-subscriber",
 ]

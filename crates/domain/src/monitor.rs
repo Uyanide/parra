@@ -48,7 +48,7 @@ impl MonitorState {
             wallpaper: WallpaperSlot::new(),
             scroll: ScrollState::new(),
             blur: BlurState::new(),
-            zoom: ZoomState::new(params.overview.zoom()),
+            zoom: ZoomState::new(params.zoom.factor()),
             params,
         };
         state.wallpaper.set(wallpaper, &crate::params::TransitionParams::INSTANT);
@@ -86,12 +86,12 @@ impl MonitorState {
     pub fn apply(&mut self, targets: &Targets) -> Moves {
         let scroll = self.params.scroll;
         let blur = self.params.blur;
-        let overview = self.params.overview;
+        let zoom = self.params.zoom;
         Moves {
             scroll_v: self.scroll.v.retarget(targets.scroll_v, scroll.vertical.tween),
             scroll_h: self.scroll.h.retarget(targets.scroll_h, scroll.horizontal.tween),
             blur: self.blur.amount.retarget(targets.blur, blur.tween),
-            zoom: self.zoom.factor.retarget(targets.zoom, overview.tween),
+            zoom: self.zoom.factor.retarget(targets.zoom, zoom.tween),
         }
     }
 

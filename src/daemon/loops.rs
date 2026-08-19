@@ -8,16 +8,17 @@ use std::time::Instant;
 use anyhow::Context as _;
 use calloop::signals::{Signal, Signals};
 use calloop::{EventLoop, Interest, LoopHandle, Mode, PostAction, channel, generic::Generic};
-use compositor::{CompositorEvent, EventSink};
-use config::{Config, Watcher};
+use compositor::{Drive, EventSink};
+use config::Watcher;
 use render::Renderer;
 use tracing::{info, warn};
 
 use super::bridge::{Ask, Bridge, Call};
-use super::{Daemon, describe};
+use super::{Daemon, Startup, describe};
 use crate::paths::Paths;
 
-pub fn run(config: Config, paths: &Paths, name: &str, started: Instant) -> anyhow::Result<()> {
+pub fn run(startup: Startup, paths: &Paths, name: &str, started: Instant) -> anyhow::Result<()> {
+    let Startup { config, config_path, backend } = startup;
     // ## Bind the control socket
     //
     // First of all, so that a second daemon refuses before it has drawn anything and
@@ -86,7 +87,7 @@ pub fn run(config: Config, paths: &Paths, name: &str, started: Instant) -> anyho
             }
         })
         .map_err(|error| anyhow::anyhow!("cannot watch the compositor: {error}"))?;
-    spawn_backend(sender, Arc::clone(&running))?;
+    spawn_backend(backend, sender, Arc::clone(&running))?;
 
     // ## Spawn the control socket thread
     //
@@ -116,8 +117,8 @@ pub fn run(config: Config, paths: &Paths, name: &str, started: Instant) -> anyho
     // ## Initialize the daemon (central state)
     //
     let mut daemon =
-        Daemon::new(renderer, config, paths.config.clone(), name.to_owned(), started, store);
-    daemon.watcher = watch_config(&handle, &paths.config);
+        Daemon::new(renderer, config, config_path.clone(), name.to_owned(), started, store);
+    daemon.watcher = config_path.as_deref().and_then(|path| watch_config(&handle, path));
 
     // ## Draw the first frame
     //
@@ -197,18 +198,24 @@ fn watch_config(handle: &LoopHandle<'static, Daemon>, path: &Path) -> Option<Wat
 /// The backend blocks on its socket, so it cannot share the event loop. Everything it
 /// observes arrives as a message, keeping every mutation of daemon state on one thread.
 fn spawn_backend(
-    sender: channel::Sender<CompositorEvent>,
+    settings: Option<compositor::backends::Settings>,
+    sender: channel::Sender<Drive>,
     running: Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
-    let Some(mut backend) = compositor::backends::detect() else {
-        warn!(
-            supported = ?compositor::backends::AVAILABLE,
-            "no compositor backend for this session, so the effects it drives stay at rest"
-        );
+    let Some(settings) = settings else {
         return Ok(());
     };
 
-    let name = backend.name();
+    let name = settings.backend();
+    let mut backend = match compositor::backends::connect(&settings) {
+        Ok(backend) => backend,
+        // Only reachable for a backend named by hand that is not the one running, since
+        // a detected one has already answered for itself.
+        Err(error) => {
+            warn!(backend = name, %error, "not connected, so the wallpaper will not follow it");
+            return Ok(());
+        }
+    };
     thread::Builder::new()
         .name(name.to_owned())
         .spawn(move || {
@@ -222,12 +229,12 @@ fn spawn_backend(
 }
 
 struct Sink {
-    sender: channel::Sender<CompositorEvent>,
+    sender: channel::Sender<Drive>,
     running: Arc<AtomicBool>,
 }
 
 impl EventSink for Sink {
-    fn emit(&self, event: CompositorEvent) {
+    fn emit(&self, event: Drive) {
         // A closed channel means the daemon is already on its way out.
         let _ = self.sender.send(event);
     }

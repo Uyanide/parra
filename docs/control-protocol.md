@@ -93,7 +93,7 @@ start. The daemon also watches the configuration file on its own; see
 | Response                      | Meaning                      |
 | ----------------------------- | ---------------------------- |
 | `"done"`                      | The request was carried out. |
-| `{"pong":{"version":1}}`      | Protocol version.            |
+| `{"pong":{"version":2}}`      | Protocol version.            |
 | `{"state":{...}}`             | A `StateSnapshot`.           |
 | `{"output":{...}}`            | One `OutputSnapshot`.        |
 | `{"error":{"message":"..."}}` | The request was refused.     |
@@ -102,7 +102,7 @@ start. The daemon also watches the configuration file on its own; see
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "namespace": "...",
   "frames": 442,
   "texture_bytes": 56173364,
@@ -124,16 +124,22 @@ start. The daemon also watches the configuration file on its own; see
         "tint": "#1e1e2e80"
       },
       "zoom": { "current": 1.111, "target": 1.111 },
-      "focused": true,
-      "overview": false,
-      "workspace": { "index": 2, "count": 4 },
-      "column": { "index": 1, "count": 3 },
+      "channels": {
+        "scroll_x": 0.5,
+        "scroll_y": 0.333,
+        "blur": true,
+        "zoom_out": false
+      },
       "gpu": { "last_us": 142, "peak_us": 185 },
       "settled": true
     }
   ]
 }
 ```
+
+`channels` is what the compositor is driving this output to, before any configuration is
+applied: two scroll positions normalized to `0..=1`, and whether the output should be
+blurred or zoomed out. The animated values elsewhere are where those have got to.
 
 Animated values report both ends. `current` answers "what is on screen", `target`
 answers "where is it going"; a widget that wants to move with the wallpaper needs the
@@ -241,7 +247,7 @@ here, followed by the `wallpaper-changed` of each output falling back.
 ### What is not reported
 
 - Where an animation has got to, and anything else per frame. `get-state` reads those.
-- Focus, workspace, column and overview. Those are the compositor's to announce, and it
-  does so earlier and more precisely than this could.
+- What the compositor is driving. Those are its to announce, and it does so earlier and
+  more precisely than this could. `get-state` reports them as `channels`.
 - Blur `radius`, `downscale` and `tint`, and every other configured parameter. They change
   only with the config file, so `config-reloaded` is the signal to read `get-state` again.

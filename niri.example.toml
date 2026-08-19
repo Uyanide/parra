@@ -1,4 +1,8 @@
-# File: $XDG_CONFIG_HOME/parra/config.toml
+# File: $XDG_CONFIG_HOME/parra/niri.toml
+#
+# One file per compositor, and exactly one is read per run: the daemon detects
+# which compositor it is under and reads that one. Nothing here is shared with
+# another compositor's file.
 #
 # Every key below is optional and shown with its default.
 
@@ -22,12 +26,23 @@ layer = "background"
 # every later one shows whatever was chosen last.
 #fallback = "~/pictures/wall.png"
 
-# Vertical parallax, following the active workspace.
-[scroll.vertical]
-enabled = true
+# What niri position moves each parallax axis. It applies to every output.
+#
+#   "workspace"  the active workspace among that output's workspaces
+#   "column"     the focused column of that output's active workspace
+#   "none"       nothing, leaving the axis centred
+[compositor]
+vertical = "workspace"
+horizontal = "none"
 
+# One monitor can differ, inheriting whatever it leaves out:
+#
+# [output."eDP-1".compositor]
+# horizontal = "column"
+
+[scroll.vertical]
 # Fraction of the available travel to use, measured about the centre. 1 uses all of
-# it, 0 pins the image to the centre.
+# it, 0 pins the image to the centre, which is how an axis is turned off from here.
 travel = 1.0
 
 # 0 makes the move instant.
@@ -36,10 +51,7 @@ duration-ms = 300
 # linear, out-quad, in-out-quad, out-cubic, in-out-cubic, out-quint
 easing = "out-cubic"
 
-# Horizontal parallax, following the column in the scrolling layout. Similar
-# as scroll.vertical, but disabled by default.
 [scroll.horizontal]
-enabled = false
 travel = 1.0
 duration-ms = 300
 easing = "out-cubic"
@@ -60,9 +72,10 @@ tint-opacity = 0.5
 duration-ms = 300
 easing = "in-out-cubic"
 
-[overview]
-# Fraction of the image visible when the overview is closed. The rest is the
-# headroom the parallax scrolls through, so 1.0 means no scrolling at all.
+[zoom]
+# Fraction of the image visible while the compositor is not asking for the wider
+# view of an output, which in niri is the overview. The rest is the headroom the
+# parallax scrolls through, so 1.0 means no scrolling at all.
 crop-ratio = 0.9
 duration-ms = 300
 easing = "out-cubic"
@@ -75,7 +88,7 @@ duration-ms = 800
 easing = "in-out-cubic"
 
 # Per-output overrides, keyed by connector name as the compositor reports it.
-# Any key left out is inherited from the sections above.
+# Any key left out is inherited from the sections above, `compositor` included.
 # [output."DP-1"]
 # blur.radius = 48
 # scroll.vertical.travel = 0.5

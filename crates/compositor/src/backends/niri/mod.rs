@@ -3,14 +3,17 @@ mod translate;
 mod wire;
 
 use std::env;
+use std::fmt;
 use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
+use serde::Deserialize;
 use tracing::{info, warn};
 
 use self::socket::Stream;
 use self::translate::Tracker;
+use crate::backends::Scoped;
 use crate::{BackendError, CompositorBackend, EventSink};
 
 pub const NAME: &str = "niri";
@@ -20,13 +23,79 @@ const SOCKET_VARIABLE: &str = "NIRI_SOCKET";
 const FIRST_RETRY: Duration = Duration::from_millis(250);
 const LONGEST_RETRY: Duration = Duration::from_secs(10);
 
-pub struct Backend {
-    socket: PathBuf,
+/// Which of niri's positions each parallax axis follows.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Params {
+    pub vertical: Axis,
+    pub horizontal: Axis,
 }
 
-pub fn detect() -> Option<Backend> {
-    let socket = env::var_os(SOCKET_VARIABLE).filter(|value| !value.is_empty())?;
-    Some(Backend { socket: PathBuf::from(socket) })
+impl Default for Params {
+    /// The workspace is the movement niri always has, so the vertical axis follows it.
+    ///
+    /// The horizontal one stays off until it is asked for, since a scrolling layout with
+    /// a single column has nowhere to travel.
+    fn default() -> Self {
+        Self { vertical: Axis::Workspace, horizontal: Axis::None }
+    }
+}
+
+/// One position niri exposes that an axis can follow.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum Axis {
+    /// The active workspace among the ones on that output.
+    Workspace,
+    /// The focused column of that output's active workspace.
+    Column,
+    /// Nothing, which leaves the axis centred.
+    #[default]
+    None,
+}
+
+impl fmt::Display for Params {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "vertical={},horizontal={}", self.vertical, self.horizontal)
+    }
+}
+
+impl Axis {
+    /// The spelling a configuration file uses, which is what serde reads.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Axis::Workspace => "workspace",
+            Axis::Column => "column",
+            Axis::None => "none",
+        }
+    }
+}
+
+impl fmt::Display for Axis {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+pub struct Backend {
+    socket: PathBuf,
+    settings: Scoped<Params>,
+}
+
+/// Whether niri is the compositor running here.
+pub fn is_running() -> bool {
+    socket().is_some()
+}
+
+fn socket() -> Option<PathBuf> {
+    env::var_os(SOCKET_VARIABLE).filter(|value| !value.is_empty()).map(PathBuf::from)
+}
+
+impl Backend {
+    pub fn connect(settings: Scoped<Params>) -> Result<Self, BackendError> {
+        let socket = socket().ok_or(BackendError::Unavailable { backend: NAME })?;
+        Ok(Self { socket, settings })
+    }
 }
 
 impl CompositorBackend for Backend {
@@ -65,8 +134,8 @@ impl Backend {
             match wire::parse(&line) {
                 Ok(Some(event)) => {
                     tracker.apply(event);
-                    for fact in tracker.facts() {
-                        sink.emit(fact);
+                    for drive in tracker.drives(&self.settings) {
+                        sink.emit(drive);
                     }
                 }
                 Ok(None) => {}

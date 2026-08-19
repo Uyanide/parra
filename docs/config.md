@@ -1,13 +1,20 @@
 # Configuration
 
-The daemon reads `$XDG_CONFIG_HOME/parra/config.toml`, falling back to
-`$HOME/.config/parra/config.toml`. `--config PATH` overrides the location.
+There is one file per compositor and exactly one is read per run. The daemon detects
+which compositor it is under and reads
+`$XDG_CONFIG_HOME/parra/<compositor>.toml`, falling back to `$HOME/.config/parra/`.
+Under niri that is `niri.toml`. `--config PATH` overrides the location.
 
 A missing file is not an error: the built-in defaults are a working configuration.
-[config.example.toml](../config.example.toml) lists every key with its default.
+[niri.example.toml](../niri.example.toml) lists every key with its default.
 
-Validate a file without starting anything with `parra daemon --check --config ./config.toml`;
-see [cli.md](cli.md).
+The split is what removes any need for a global default that one compositor then
+overrides: every key in the file already belongs to the compositor the file is for. The
+cost is duplication. Someone who runs two compositors writes their wallpaper, blur and
+transition settings twice, and there is no include mechanism.
+
+Validate a file without starting anything, on any machine, with
+`parra daemon --check --backend niri --config ./niri.toml`; see [cli.md](cli.md).
 
 ## Inheritance
 
@@ -24,6 +31,10 @@ downscale = 2
 [output."DP-1"]
 blur.radius = 16   # downscale stays 2
 ```
+
+`[output."<connector>".compositor]` overrides the file's own `[compositor]` section the
+same way, key by key. What a monitor leaves out it inherits, so an override is read as a
+whole section and never resets a key it did not mention.
 
 ## Keys
 
@@ -56,32 +67,69 @@ user can reason about.
 The file is not opened at load time. A path that does not exist yet is a decode error
 later, rather than a configuration error.
 
+### `[compositor]`
+
+The only section whose keys differ between compositors, since it is the only one that
+names things the compositor has. Under niri it says which position moves each axis:
+
+| Key          | Default       | Meaning                                                       |
+| ------------ | ------------- | ------------------------------------------------------------- |
+| `vertical`   | `"workspace"` | `"workspace"`, `"column"` or `"none"`.                        |
+| `horizontal` | `"none"`      | Same values. `"none"` leaves the axis pinned to its centre.   |
+
+```toml
+[compositor]
+vertical = "workspace"
+horizontal = "column"   # turn on horizontal parallax
+```
+
+`"workspace"` follows the active workspace among that output's own workspaces;
+`"column"` follows the focused column of that output's active workspace.
+
+Each monitor scrolls by its own active workspace and that workspace's own column, so a
+monitor without the focus holds its position rather than drifting. A workspace nothing has
+been focused on yet sits centred, and so does a monitor whose focused window is floating or
+fullscreen and therefore has no place in the scroll.
+
+An unknown key here is an error naming the file, so a key that belonged to another
+compositor cannot sit unnoticed.
+
+One monitor can differ:
+
+```toml
+[compositor]
+horizontal = "column"
+
+[output."eDP-1".compositor]
+horizontal = "none"   # vertical stays "workspace"
+```
+
+This section is read when the backend connects, so a reload accepts it but it takes effect
+on the **next start**. `scroll.<axis>.travel` is the live way to change how far an axis
+moves, including `0` to pin it.
+
 ### `[scroll.vertical]` and `[scroll.horizontal]`
 
-The two parallax axes take the same four keys and are configured apart. The vertical axis
-follows the active workspace, the horizontal one the column in the scrolling layout. Both
-are per output.
+The two parallax axes take the same three keys and are configured apart. What moves each
+one is `[compositor]` above; these say how far and how fast it moves. Both are per output.
 
-| Key           | Default                             | Meaning                                                                      |
-| ------------- | ----------------------------------- | ---------------------------------------------------------------------------- |
-| `enabled`     | `true` vertical, `false` horizontal | When false the image is pinned to its centre on that axis.                   |
-| `travel`      | `1.0`                               | Fraction of the available travel to use, `0..=1`, measured about the centre. |
-| `duration-ms` | `300`                               | `0` makes the move instant. Capped at 60000.                                 |
-| `easing`      | `"out-cubic"`                       | See [easing functions](#easing-functions).                                   |
+| Key           | Default       | Meaning                                                                      |
+| ------------- | ------------- | ---------------------------------------------------------------------------- |
+| `travel`      | `1.0`         | Fraction of the available travel to use, `0..=1`, measured about the centre. |
+| `duration-ms` | `300`         | `0` makes the move instant. Capped at 60000.                                 |
+| `easing`      | `"out-cubic"` | See [easing functions](#easing-functions).                                   |
 
 ```toml
 [scroll.vertical]
 travel = 0.5
 
 [scroll.horizontal]
-enabled = true
 duration-ms = 250   # travel and easing stay at their defaults
 ```
 
-Each monitor scrolls by its own active workspace and that workspace's own column, so a
-monitor without the focus holds its position rather than drifting to other positions. A
-workspace nothing has been focused on yet sits centred, and so does a monitor whose
-focused window is floating or fullscreen and therefore has no place in the scroll.
+There is no `enabled` key. `travel = 0` pins an axis to its centre, and so does
+`[compositor]` naming nothing for it, so a third way to say it would only be a way to
+disagree with itself.
 
 ### `[blur]`
 
@@ -94,23 +142,25 @@ focused window is floating or fullscreen and therefore has no place in the scrol
 | `duration-ms`  | `300`            |                                                                                                     |
 | `easing`       | `"in-out-cubic"` | See [easing functions](#easing-functions).                                                          |
 
-An output blurs when it holds the focused window, or when the control socket has asked
-for it. Nothing focused anywhere leaves every output sharp.
+An output blurs when the compositor drives it to, which under niri means it holds the
+focused window, or when the control socket has asked for it. Nothing focused anywhere
+leaves every output sharp.
 
 `radius` is measured in texels of the wallpaper texture, which is decoded at the buffer
 size times the deepest zoom. At rest one texel is one device pixel, so the configured
 number is the blur's extent on screen, and one radius means the same thing on monitors at
 different scales.
 
-### `[overview]`
+### `[zoom]`
 
-| Key           | Default       | Meaning                                                                                                                                                                                                           |
-| ------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `crop-ratio`  | `0.9`         | Fraction of the image visible while the overview is closed, `0.25..=1`. The remainder is the headroom the parallax travels through, so `1.0` leaves nothing to scroll unless the image is taller than the screen. |
-| `duration-ms` | `300`         |                                                                                                                                                                                                                   |
-| `easing`      | `"out-cubic"` | See [easing functions](#easing-functions).                                                                                                                                                                        |
+| Key           | Default       | Meaning                                                                                                                                                                                                        |
+| ------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `crop-ratio`  | `0.9`         | Fraction of the image visible while zoomed in, `0.25..=1`. The remainder is the headroom the parallax travels through, so `1.0` leaves nothing to scroll unless the image is taller than the screen. |
+| `duration-ms` | `300`         |                                                                                                                                                                                                                |
+| `easing`      | `"out-cubic"` | See [easing functions](#easing-functions).                                                                                                                                                                     |
 
-Opening the overview zooms back out to show the whole image.
+An output zooms back out to the whole image when the compositor drives it to, which under
+niri means the overview is open.
 
 The wallpaper is decoded at the size the deepest zoom needs, `monitor / crop-ratio` per
 axis, so the lower this is the more texture memory the image costs: at `0.25` that is
@@ -159,7 +209,7 @@ Unknown keys are rejected rather than ignored, with the line and the accepted na
 Out-of-range values are reported with their full key path:
 
 ```
-parra: config.toml: scroll.vertical.duration-ms: expected at most 60000 ms
+parra: niri.toml: scroll.vertical.duration-ms: expected at most 60000 ms
 ```
 
 ## What is not configurable

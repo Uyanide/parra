@@ -20,9 +20,15 @@ pub struct ConfigFile {
     #[serde(default)]
     pub blur: BlurSection,
     #[serde(default)]
-    pub overview: OverviewSection,
+    pub zoom: ZoomSection,
     #[serde(default)]
     pub transition: TransitionSection,
+    /// The running compositor's own settings, carried rather than read.
+    ///
+    /// Which keys belong here depends on which compositor the file is for, so the
+    /// backend for that compositor is what gives them meaning.
+    #[serde(default)]
+    pub compositor: toml::Table,
     #[serde(default)]
     pub output: BTreeMap<String, OutputSection>,
 }
@@ -52,12 +58,11 @@ pub struct ScrollSection {
     pub horizontal: AxisSection,
 }
 
-/// One parallax axis. The two are configured apart because the compositor animates the
-/// workspace switch and the column move apart.
+/// One parallax axis. The two are configured apart because a compositor animates the two
+/// movements apart, and one shared curve could only ever match one of them.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct AxisSection {
-    pub enabled: Option<bool>,
     pub travel: Option<f32>,
     pub duration_ms: Option<u32>,
     pub easing: Option<Easing>,
@@ -76,7 +81,7 @@ pub struct BlurSection {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub struct OverviewSection {
+pub struct ZoomSection {
     pub crop_ratio: Option<f32>,
     pub duration_ms: Option<u32>,
     pub easing: Option<Easing>,
@@ -96,12 +101,15 @@ pub struct TransitionSection {
 pub struct OutputSection {
     #[serde(default)]
     pub wallpaper: WallpaperSection,
+    /// Overrides for this monitor, over the file's own `[compositor]` section.
+    #[serde(default)]
+    pub compositor: toml::Table,
     #[serde(default)]
     pub scroll: ScrollSection,
     #[serde(default)]
     pub blur: BlurSection,
     #[serde(default)]
-    pub overview: OverviewSection,
+    pub zoom: ZoomSection,
     #[serde(default)]
     pub transition: TransitionSection,
 }

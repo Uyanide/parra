@@ -13,7 +13,7 @@ subcommand, and override the XDG-derived locations described in
 ## Commands
 
 ```
-parra daemon [--check]
+parra daemon [--check] [--backend NAME]
 parra set PATH [--output NAME] [--no-save]
 parra unset [--output NAME] [--no-save]
 parra blur on|off [--output NAME]
@@ -23,11 +23,16 @@ parra reload
 parra ping
 ```
 
-### `parra daemon [--check]`
+### `parra daemon [--check] [--backend NAME]`
 
 Runs the wallpaper daemon. `--check` loads and validates the configuration, reports the
-resolved namespace, layer, socket, fallback and remembered wallpaper, and exits without
-touching a graphics stack.
+resolved namespace, layer, socket, fallback, compositor settings and remembered wallpaper,
+and exits without touching a graphics stack.
+
+`--backend NAME` says which compositor's configuration to use instead of detecting the one
+running. Since there is one config file per compositor, this is what selects the file, and
+it is what lets `--check` validate a file on a machine that is not running that compositor
+at all.
 
 ### `parra set PATH [--output NAME] [--no-save]`
 

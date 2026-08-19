@@ -1,12 +1,12 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use domain::{Easing, Facts, LogicalSize, MonitorState, Move, OutputId, Rgba, Swap};
+use domain::{Driven, Easing, LogicalSize, MonitorState, Move, OutputId, Rgba, Swap};
 use serde::{Deserialize, Serialize};
 
 /// Bumped whenever the wire format changes, including when it only gains a field.
 /// `Ping` reports it, which is the only way to tell a stale daemon from an unreachable one.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Every duration on the wire is in microseconds, so nothing has to be read twice to
 /// find out which unit it is in.
@@ -101,7 +101,7 @@ impl fmt::Display for Property {
 /// What is reported is the daemon's own decisions, at the moment it takes them:
 /// - Animations are reported once, whole, so a client can run the same curve rather than
 ///   sample this one.
-/// - Compositor facts, per-frame values and configured parameters are not here. `get-state`
+/// - Driven channels, per-frame values and configured parameters are not here. `get-state`
 ///   has them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -263,10 +263,16 @@ pub struct BlurSnapshot {
     pub tint: Rgba,
 }
 
+/// What the compositor is driving this output to, before any configuration is applied.
+///
+/// The animated values elsewhere in the snapshot are where those channels have got to;
+/// these are what they are heading for.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct IndexSnapshot {
-    pub index: u32,
-    pub count: u32,
+pub struct ChannelSnapshot {
+    pub scroll_x: f32,
+    pub scroll_y: f32,
+    pub blur: bool,
+    pub zoom_out: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -278,10 +284,7 @@ pub struct OutputSnapshot {
     pub scroll: ScrollSnapshot,
     pub blur: BlurSnapshot,
     pub zoom: Tween,
-    pub focused: bool,
-    pub overview: bool,
-    pub workspace: IndexSnapshot,
-    pub column: IndexSnapshot,
+    pub channels: ChannelSnapshot,
     pub gpu: GpuSnapshot,
     /// False while something is still animating, which is also when frames are being
     /// submitted for this output.
@@ -293,8 +296,8 @@ impl OutputSnapshot {
     ///
     /// `gpu` arrives as an argument because measuring it is the renderer's business, and
     /// the two crates cannot see each other. The root package joins them.
-    pub fn new(state: &MonitorState, facts: &Facts, gpu: GpuSnapshot) -> Self {
-        let output_facts = facts.output(&state.id);
+    pub fn new(state: &MonitorState, driven: &Driven, gpu: GpuSnapshot) -> Self {
+        let channels = driven.output(&state.id);
         Self {
             name: state.id.clone(),
             logical: state.logical,
@@ -311,15 +314,11 @@ impl OutputSnapshot {
                 tint: state.params.blur.effective_tint(),
             },
             zoom: tween(&state.zoom.factor),
-            focused: facts.is_focused(&state.id),
-            overview: facts.overview_active,
-            workspace: IndexSnapshot {
-                index: output_facts.workspace.idx,
-                count: output_facts.workspace.count,
-            },
-            column: IndexSnapshot {
-                index: output_facts.column.idx,
-                count: output_facts.column.count,
+            channels: ChannelSnapshot {
+                scroll_x: channels.scroll_x,
+                scroll_y: channels.scroll_y,
+                blur: channels.blur,
+                zoom_out: channels.zoom_out,
             },
             gpu,
             settled: state.is_settled(),

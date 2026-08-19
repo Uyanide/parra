@@ -24,12 +24,17 @@ The load-bearing property is what is _absent_: `render/Cargo.toml` does not list
 `compositor`, so the renderer physically cannot learn that niri exists. The table below is
 the whole of that rule. Only the root package sees every crate, and the decisions it makes
 are the ones that need that view: what starts in which order, what happens when a
-wallpaper will not load, and joining two crates' numbers into one answer.
+wallpaper will not load, and joining two crates that cannot see each other.
+
+There are two of those joins. `OutputSnapshot::new` takes the GPU timings as an argument
+because measuring them is the renderer's business and `control` cannot see `render`; and
+the compositor's own config section is parsed there, because the file comes from `config`
+and the schema from `compositor`, neither of which is allowed to know the other.
 
 | Crate        | Knows                                                            | Must not know                                                                      |
 | ------------ | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | `domain`     | Identities, geometry, animation, resolved parameters, policy     | Wayland, OpenGL, compositors, files, sockets, the clock                            |
-| `compositor` | How one compositor talks and how to normalize what it says       | What its facts drive, config, rendering, the control socket                        |
+| `compositor` | How one compositor talks, and how to drive normalized channels from it | Config files, rendering, the control socket, why a channel value is wanted  |
 | `render`     | Wayland, EGL/GLES, image decoding, how to draw a `MonitorState`  | Compositors, the control protocol, why a value is what it is, which GPU it runs on |
 | `config`     | The TOML surface, merge rules, file watching                     | Rendering, compositors, IPC                                                        |
 | `control`    | The request and response wire format, socket plumbing            | How to satisfy a request                                                           |
@@ -43,7 +48,7 @@ outside, which is what makes the animation and policy layers testable without a 
 
 ```mermaid
 graph LR
-    CS["compositor socket"] --> CE["CompositorEvent"] --> F["Facts"]
+    CS["compositor socket"] --> CE["Drive"] --> F["Driven"]
     KS["control socket"] --> S["Signals"]
     CF["config file"] --> P["OutputParams"]
     F --> R["policy::resolve"]
@@ -193,22 +198,34 @@ surfaces first, then the EGL display, then the connection. The middle step is wh
 declared before `wayland` in `Renderer`, fields being dropped in declaration order. Any
 other order segfaults in the driver after the last log line.
 
-## The two axes
+## The four channels
 
-Vertical parallax follows the active workspace, horizontal follows the column in the
-scrolling layout. Both run through the same `axis` function in `policy`, the same
-`Animated` pair, and the same `sample_rect`, and both are configured by the same
-`AxisParams`, once per axis. `scroll.horizontal.enabled` defaults to false, which collapses
-`axis` to the centre whatever the column is; turning it on is all that enabling horizontal
-parallax takes.
+A backend drives four values and nothing else: two scroll positions normalized to `0..=1`,
+and two booleans for whether an output should be blurred and whether it should be zoomed
+out. They are the animated channels themselves, so `policy::resolve` applies configuration
+to them rather than deciding what they stand for.
+
+The vocabulary stops there on purpose. `domain::Channels` is the whole of what a compositor
+can say here, and a backend with something else to report changes `domain` before it
+changes anything else. What the ceiling buys is that `Drive` carries no compositor's words,
+so niri's workspaces and columns reach nothing outside its own backend.
+
+Everything is per output. That niri blurs at most one output at a time, and zooms every
+output out together, are niri's rules rather than the boundary's: its backend states a
+value for every output on every update, and nothing downstream assumes either. Two outputs
+blurred at once is representable, because some other compositor will do it.
+
+Which niri position moves which axis is `[compositor]` in its own config file. Centring an
+axis is `horizontal = "none"` there, rather than a second switch in the shared parameters,
+because otherwise two keys would say one thing.
 
 The axes are configured apart because the compositor animates them apart, and one shared
 curve could only ever match one of the two. Which niri animation each pairs with is in
 [usage.md](usage.md#match-animations).
 
-**Both axes are per output, and the horizontal one had to be made so.** Focus is global,
-so reading the column off the focused window answers for one monitor and leaves every
-other one reporting nothing, which `Index::progress` reads as centred.
+**Both axes are per output, and the horizontal one had to be made so.** Focus is global in
+niri, so reading the column off the focused window answers for one monitor and leaves every
+other one reporting nothing, which the backend's `progress` reads as centred.
 
 The fix is that the column is remembered per workspace, in `Tracker::workspace_column`,
 updated whenever the focus lands somewhere with a place in the scroll. An output then
@@ -221,8 +238,8 @@ consequences fall out of the same choice:
 - A remembered column that has since closed resolves to the nearest surviving one rather
   than to the centre, so closing a window never makes the wallpaper jump.
 
-A workspace nothing has ever been focused on reports `idx = 0`, and centred is the only
-neutral answer there.
+A workspace nothing has ever been focused on has no position to report, and centred is the
+only neutral answer there.
 
 Wallpaper transitions are carried the same way, from the two-slot `WallpaperSlot` in
 `domain` through to `u_mix` in the composite shader. This is on by default, so the second
@@ -241,8 +258,20 @@ either applies is in [config.md](config.md#transition).
 
 ## Extension seams
 
-Adding a compositor means adding `compositor/src/backends/<name>/` and one line in
-`backends/mod.rs`. No other crate changes.
+Adding a compositor means adding `compositor/src/backends/<name>/`, its arms in
+`backends/mod.rs`, and a `<name>.example.toml`. No other crate changes, and no crate but
+`compositor` names the backend at all: `AVAILABLE`, `detect`, `Params` and `connect` are
+what everything else works through.
+
+That holds only while the new backend fits the four channels above. One that needs a fifth
+changes `domain` first and then everything downstream of it, which is what happened the
+last time this was tried. The ceiling is written down here rather than promised away.
+
+The backend's own settings are its `Params` type, deserialized from the `[compositor]`
+table. `config` carries that table across without reading it, and `compositor` takes a
+`Deserializer` rather than a file format, so neither has to know the other exists. Two
+`cargo tree` checks keep that honest: `config` must not reach `compositor`, and
+`compositor` must not reach `toml`.
 
 Where the wallpaper sits when the overview opens is the compositor's decision, not this
 program's. niri draws layer surfaces inside each workspace thumbnail by default, and puts

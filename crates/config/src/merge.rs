@@ -4,13 +4,13 @@ use std::path::{Path, PathBuf};
 use domain::anim::seconds_from_millis;
 use domain::params::MIN_CROP_RATIO;
 use domain::{
-    AxisParams, BlurParams, Easing, OutputId, OutputParams, OverviewParams, ScrollParams,
-    SurfaceParams, TransitionParams, Tween, WallpaperRef,
+    AxisParams, BlurParams, Easing, OutputId, OutputParams, ScrollParams, SurfaceParams,
+    TransitionParams, Tween, WallpaperRef, ZoomParams,
 };
 
 use crate::schema::{
-    AxisSection, BlurSection, ConfigFile, OutputSection, OverviewSection, ScrollSection,
-    TransitionSection, WallpaperSection,
+    AxisSection, BlurSection, ConfigFile, OutputSection, ScrollSection, TransitionSection,
+    WallpaperSection, ZoomSection,
 };
 
 /// Enough passes to blur a 4K image beyond recognition; past this the bake cost stops
@@ -55,6 +55,10 @@ pub struct Config {
     pub surface: SurfaceParams,
     pub global: OutputParams,
     per_output: BTreeMap<OutputId, OutputParams>,
+    compositor: toml::Table,
+    /// Only the outputs that override something, each already overlaid on the global
+    /// table so that whoever reads one reads a complete section.
+    compositor_per_output: BTreeMap<OutputId, toml::Table>,
 }
 
 impl Config {
@@ -67,6 +71,36 @@ impl Config {
     pub fn configured_outputs(&self) -> impl Iterator<Item = &OutputId> {
         self.per_output.keys()
     }
+
+    /// The compositor's own section, exactly as it was written.
+    pub fn compositor_table(&self) -> &toml::Table {
+        &self.compositor
+    }
+
+    /// Each output that says something of its own about the compositor, with the global
+    /// section already underneath it.
+    pub fn compositor_overrides(&self) -> impl Iterator<Item = (&OutputId, &toml::Table)> {
+        self.compositor_per_output.iter()
+    }
+}
+
+/// Lays one table over another, key path by key path.
+///
+/// Two tables under the same key merge; anything else replaces, which is how a leaf under
+/// an output overrides its global twin while the rest of the section is inherited.
+fn overlay(base: &toml::Table, over: &toml::Table) -> toml::Table {
+    let mut merged = base.clone();
+    for (key, value) in over {
+        match (merged.get(key), value) {
+            (Some(toml::Value::Table(base)), toml::Value::Table(over)) => {
+                merged.insert(key.clone(), overlay(base, over).into());
+            }
+            _ => {
+                merged.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    merged
 }
 
 /// Every section that can appear both globally and under one output.
@@ -74,7 +108,7 @@ struct Sections<'a> {
     wallpaper: &'a WallpaperSection,
     scroll: &'a ScrollSection,
     blur: &'a BlurSection,
-    overview: &'a OverviewSection,
+    zoom: &'a ZoomSection,
     transition: &'a TransitionSection,
 }
 
@@ -84,7 +118,7 @@ impl<'a> Sections<'a> {
             wallpaper: &file.wallpaper,
             scroll: &file.scroll,
             blur: &file.blur,
-            overview: &file.overview,
+            zoom: &file.zoom,
             transition: &file.transition,
         }
     }
@@ -94,7 +128,7 @@ impl<'a> Sections<'a> {
             wallpaper: &section.wallpaper,
             scroll: &section.scroll,
             blur: &section.blur,
-            overview: &section.overview,
+            zoom: &section.zoom,
             transition: &section.transition,
         }
     }
@@ -105,6 +139,7 @@ pub fn resolve(file: &ConfigFile, ctx: &Context<'_>) -> Result<Config> {
     apply(&mut global, Sections::global(file), "", ctx)?;
 
     let mut per_output = BTreeMap::new();
+    let mut compositor_per_output = BTreeMap::new();
     for (name, section) in &file.output {
         if name.is_empty() {
             return Err(Invalid::new("output", "an output table needs a connector name"));
@@ -112,7 +147,12 @@ pub fn resolve(file: &ConfigFile, ctx: &Context<'_>) -> Result<Config> {
         let prefix = format!("output.{name:?}.");
         let mut params = global.clone();
         apply(&mut params, Sections::output(section), &prefix, ctx)?;
-        per_output.insert(OutputId::new(name.clone()), params);
+        let id = OutputId::new(name.clone());
+        if !section.compositor.is_empty() {
+            compositor_per_output
+                .insert(id.clone(), overlay(&file.compositor, &section.compositor));
+        }
+        per_output.insert(id, params);
     }
 
     let namespace = match &file.general.namespace {
@@ -124,7 +164,13 @@ pub fn resolve(file: &ConfigFile, ctx: &Context<'_>) -> Result<Config> {
     };
     let surface = SurfaceParams { namespace, layer: file.general.layer.unwrap_or_default() };
 
-    Ok(Config { surface, global, per_output })
+    Ok(Config {
+        surface,
+        global,
+        per_output,
+        compositor: file.compositor.clone(),
+        compositor_per_output,
+    })
 }
 
 fn apply(
@@ -136,7 +182,7 @@ fn apply(
     apply_wallpaper(params, sections.wallpaper, prefix, ctx)?;
     apply_scroll(&mut params.scroll, sections.scroll, prefix)?;
     apply_blur(&mut params.blur, sections.blur, prefix)?;
-    apply_overview(&mut params.overview, sections.overview, prefix)?;
+    apply_zoom(&mut params.zoom, sections.zoom, prefix)?;
     apply_transition(&mut params.transition, sections.transition, prefix)
 }
 
@@ -159,7 +205,6 @@ fn apply_scroll(params: &mut ScrollParams, section: &ScrollSection, prefix: &str
 }
 
 fn apply_axis(params: &mut AxisParams, section: &AxisSection, path: &str) -> Result<()> {
-    overwrite(&mut params.enabled, section.enabled);
     set_ratio(&mut params.travel, section.travel, &format!("{path}.travel"))?;
     apply_tween(&mut params.tween, section.duration_ms, section.easing, path)
 }
@@ -188,24 +233,15 @@ fn apply_blur(params: &mut BlurParams, section: &BlurSection, prefix: &str) -> R
     apply_tween(&mut params.tween, section.duration_ms, section.easing, &format!("{prefix}blur"))
 }
 
-fn apply_overview(
-    params: &mut OverviewParams,
-    section: &OverviewSection,
-    prefix: &str,
-) -> Result<()> {
+fn apply_zoom(params: &mut ZoomParams, section: &ZoomSection, prefix: &str) -> Result<()> {
     if let Some(value) = section.crop_ratio {
-        let key = format!("{prefix}overview.crop-ratio");
+        let key = format!("{prefix}zoom.crop-ratio");
         if !value.is_finite() || !(MIN_CROP_RATIO..=1.0).contains(&value) {
             return Err(Invalid::new(key, format!("expected a number in {MIN_CROP_RATIO}..=1")));
         }
         params.crop_ratio = value;
     }
-    apply_tween(
-        &mut params.tween,
-        section.duration_ms,
-        section.easing,
-        &format!("{prefix}overview"),
-    )
+    apply_tween(&mut params.tween, section.duration_ms, section.easing, &format!("{prefix}zoom"))
 }
 
 fn apply_transition(
@@ -325,23 +361,36 @@ mod tests {
         assert_eq!(config.surface.layer, Layer::Background);
     }
 
-    /// `config.example.toml` says every key is shown with its default. Nothing but this
+    /// Every example file says its keys are shown with their defaults. Nothing but this
     /// stops that from quietly becoming false the next time a default moves.
+    ///
+    /// Found by pattern rather than by name, since there is one example per compositor.
     #[test]
-    fn the_example_config_states_the_real_defaults() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config.example.toml");
-        let text = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("{} should be readable: {e}", path.display()));
+    fn the_example_configs_state_the_real_defaults() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let examples: Vec<PathBuf> = std::fs::read_dir(&root)
+            .expect("the repository root should be readable")
+            .filter_map(|entry| {
+                let path = entry.ok()?.path();
+                path.file_name()?.to_str()?.ends_with(".example.toml").then_some(path)
+            })
+            .collect();
+        assert!(!examples.is_empty(), "no example configuration was found to check");
 
-        let config = parse(&text).expect("the example config should be valid");
+        for path in examples {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("{name} should be readable: {e}"));
+            let config = parse(&text).unwrap_or_else(|e| panic!("{name} should be valid: {e:?}"));
 
-        assert_eq!(
-            config.global,
-            OutputParams::default(),
-            "config.example.toml has drifted from the defaults in `domain`"
-        );
-        assert_eq!(config.surface.namespace, NAMESPACE, "the example should not set a namespace");
-        assert_eq!(config.surface.layer, Layer::default());
+            assert_eq!(
+                config.global,
+                OutputParams::default(),
+                "{name} has drifted from the defaults in `domain`"
+            );
+            assert_eq!(config.surface.namespace, NAMESPACE, "{name} should not set a namespace");
+            assert_eq!(config.surface.layer, Layer::default());
+        }
     }
 
     #[test]
@@ -392,7 +441,6 @@ mod tests {
             easing = "linear"
 
             [scroll.horizontal]
-            enabled = true
             duration-ms = 600
             easing = "out-quint"
             "#,
@@ -402,7 +450,6 @@ mod tests {
         let scroll = config.global.scroll;
         assert_eq!(scroll.vertical.tween.duration, 0.25);
         assert_eq!(scroll.vertical.tween.easing, Easing::Linear);
-        assert!(scroll.horizontal.enabled);
         assert_eq!(scroll.horizontal.tween.duration, 0.6);
         assert_eq!(scroll.horizontal.tween.easing, Easing::OutQuint);
     }
@@ -420,10 +467,81 @@ mod tests {
     }
 
     #[test]
-    fn the_horizontal_axis_is_disabled_by_default() {
-        let defaults = ScrollParams::default();
-        assert!(defaults.vertical.enabled);
-        assert!(!defaults.horizontal.enabled);
+    fn a_compositor_table_is_carried_through_unread() {
+        let config = parse("[compositor]\nvertical = \"workspace\"\nnonsense = 3\n").unwrap();
+        let table = config.compositor_table();
+
+        assert_eq!(table["vertical"].as_str(), Some("workspace"));
+        assert_eq!(table["nonsense"].as_integer(), Some(3), "unknown keys survive the crossing");
+    }
+
+    #[test]
+    fn an_output_compositor_table_is_laid_over_the_global_one() {
+        let config = parse(
+            r#"
+            [compositor]
+            vertical = "workspace"
+            horizontal = "column"
+            [output."DP-1".compositor]
+            horizontal = "none"
+            "#,
+        )
+        .unwrap();
+
+        let overrides: Vec<_> = config.compositor_overrides().collect();
+        assert_eq!(overrides.len(), 1, "only the output that said something");
+        let (output, table) = overrides[0];
+        assert_eq!(output, &dp1());
+        assert_eq!(table["horizontal"].as_str(), Some("none"), "the override should win");
+        assert_eq!(table["vertical"].as_str(), Some("workspace"), "the rest is inherited");
+    }
+
+    #[test]
+    fn an_edit_under_one_output_shows_up_as_a_difference() {
+        let global = "[compositor]\nhorizontal = \"column\"\n";
+        let before = parse(global).unwrap();
+        let after =
+            parse(&format!("{global}[output.\"DP-1\".compositor]\nvertical = \"none\"\n")).unwrap();
+
+        assert_eq!(before.compositor_table(), after.compositor_table(), "the global section");
+        assert!(
+            !before.compositor_overrides().eq(after.compositor_overrides()),
+            "a reload has to notice an edit that only one output made"
+        );
+    }
+
+    #[test]
+    fn an_output_with_no_compositor_table_overrides_nothing() {
+        let config = parse(
+            r#"
+            [compositor]
+            horizontal = "column"
+            [output."DP-1"]
+            blur.radius = 16
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.compositor_overrides().count(), 0);
+    }
+
+    #[test]
+    fn a_nested_compositor_key_merges_rather_than_replacing() {
+        let config = parse(
+            r#"
+            [compositor.axes]
+            vertical = "workspace"
+            horizontal = "column"
+            [output."DP-1".compositor.axes]
+            horizontal = "none"
+            "#,
+        )
+        .unwrap();
+
+        let (_, table) = config.compositor_overrides().next().expect("DP-1 overrides something");
+        let axes = table["axes"].as_table().expect("a table");
+        assert_eq!(axes["horizontal"].as_str(), Some("none"));
+        assert_eq!(axes["vertical"].as_str(), Some("workspace"), "a sibling key survives");
     }
 
     #[test]
@@ -510,7 +628,7 @@ mod tests {
             ("[blur]\nradius = 9999\n", "blur.radius"),
             ("[blur]\ndownscale = 0\n", "blur.downscale"),
             ("[blur]\ntint-opacity = -0.1\n", "blur.tint-opacity"),
-            ("[overview]\ncrop-ratio = 0.0\n", "overview.crop-ratio"),
+            ("[zoom]\ncrop-ratio = 0.0\n", "zoom.crop-ratio"),
             ("[transition]\nduration-ms = 999999\n", "transition.duration-ms"),
         ];
         for (text, expected) in cases {

@@ -23,40 +23,28 @@ pub struct OutputParams {
     pub fallback: Option<WallpaperRef>,
     pub scroll: ScrollParams,
     pub blur: BlurParams,
-    pub overview: OverviewParams,
+    pub zoom: ZoomParams,
     pub transition: TransitionParams,
 }
 
 /// The two parallax axes, each configured separately.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ScrollParams {
-    /// Follows the active workspace.
     pub vertical: AxisParams,
-    /// Follows the column in the scrolling layout.
     pub horizontal: AxisParams,
 }
 
-impl Default for ScrollParams {
-    fn default() -> Self {
-        Self {
-            vertical: AxisParams::default(),
-            horizontal: AxisParams { enabled: false, ..AxisParams::default() },
-        }
-    }
-}
-
+/// How one axis answers the position its channel is driven to.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AxisParams {
-    /// When false the image is pinned to its centre on this axis.
-    pub enabled: bool,
-    /// Fraction of the available travel to use, about the centre. 0 pins to centre.
+    /// Fraction of the available travel to use, about the centre. 0 pins it there.
     pub travel: f32,
     pub tween: Tween,
 }
 
 impl Default for AxisParams {
     fn default() -> Self {
-        Self { enabled: true, travel: 1.0, tween: Tween::new(0.3, Easing::OutCubic) }
+        Self { travel: 1.0, tween: Tween::new(0.3, Easing::OutCubic) }
     }
 }
 
@@ -94,22 +82,24 @@ impl BlurParams {
     }
 }
 
+/// How far in the wallpaper sits while its output is not driven to zoom out.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct OverviewParams {
-    /// Fraction of the image visible when the overview is closed. Below 1 it leaves
-    /// headroom for the parallax to travel through.
+pub struct ZoomParams {
+    /// Fraction of the image visible when zoomed in. Below 1 it leaves headroom for the
+    /// parallax to travel through.
     pub crop_ratio: f32,
     pub tween: Tween,
 }
 
-impl Default for OverviewParams {
+impl Default for ZoomParams {
     fn default() -> Self {
         Self { crop_ratio: 0.9, tween: Tween::new(0.3, Easing::OutCubic) }
     }
 }
 
-impl OverviewParams {
-    pub fn zoom(&self) -> f32 {
+impl ZoomParams {
+    /// The multiplier the renderer wants, which is what cropping to a ratio comes to.
+    pub fn factor(&self) -> f32 {
         1.0 / self.crop_ratio.clamp(MIN_CROP_RATIO, 1.0)
     }
 }
@@ -170,21 +160,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn zoom_is_the_reciprocal_of_the_crop_ratio() {
-        let params = OverviewParams { crop_ratio: 0.5, ..OverviewParams::default() };
-        assert_eq!(params.zoom(), 2.0);
+    fn the_zoom_factor_is_the_reciprocal_of_the_crop_ratio() {
+        let params = ZoomParams { crop_ratio: 0.5, ..ZoomParams::default() };
+        assert_eq!(params.factor(), 2.0);
     }
 
     #[test]
     fn a_full_crop_ratio_means_no_zoom() {
-        let params = OverviewParams { crop_ratio: 1.0, ..OverviewParams::default() };
-        assert_eq!(params.zoom(), 1.0);
+        let params = ZoomParams { crop_ratio: 1.0, ..ZoomParams::default() };
+        assert_eq!(params.factor(), 1.0);
     }
 
     #[test]
-    fn zoom_stays_finite_for_a_degenerate_crop_ratio() {
-        let params = OverviewParams { crop_ratio: 0.0, ..OverviewParams::default() };
-        assert!(params.zoom().is_finite());
+    fn the_zoom_factor_stays_finite_for_a_degenerate_crop_ratio() {
+        let params = ZoomParams { crop_ratio: 0.0, ..ZoomParams::default() };
+        assert!(params.factor().is_finite());
     }
 
     #[test]
