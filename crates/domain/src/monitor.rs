@@ -217,6 +217,21 @@ mod tests {
         assert!((excursion(&mut state) - 1.0).abs() < 1e-4);
     }
 
+    /// What a workspace opening does: every position stays where it was and the rect
+    /// still moves, so a redraw cannot be inferred from the animations alone.
+    #[test]
+    fn a_stride_change_moves_the_rect_with_the_position_standing_still() {
+        let mut state = monitor();
+        state.scroll.v.snap(0.0);
+
+        state.stride = Stride { v: 1.0, h: 0.0 };
+        let two_stops = state.sample_rect(TALL);
+        state.stride = Stride { v: 0.5, h: 0.0 };
+        let three_stops = state.sample_rect(TALL);
+
+        assert!(two_stops.v0 > three_stops.v0, "the looser cap reaches further up");
+    }
+
     #[test]
     fn lifting_the_cap_gives_the_whole_travel_back() {
         let mut state = monitor();

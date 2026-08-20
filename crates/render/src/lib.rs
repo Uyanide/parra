@@ -145,6 +145,19 @@ impl Renderer {
         self.wayland.surfaces().filter(|surface| surface.is_drawable()).map(|surface| &surface.id)
     }
 
+    /// Records that this output's next frame differs for a reason no animation reports.
+    ///
+    /// `draw` takes an animation still being in flight as its evidence that something
+    /// changed, which covers a move that takes time and nothing else. A move of no
+    /// duration settles before the next pass, and a parameter read where the frame is
+    /// built never animates at all; both leave every value settled, so without this they
+    /// wait for an unrelated animation to carry them onto the screen.
+    pub fn invalidate(&mut self, id: &OutputId) {
+        if let Some(surface) = self.wayland.surface_mut(id) {
+            surface.pacing.dirty = true;
+        }
+    }
+
     /// Draws every output that needs it, and reports what the decode thread finished.
     ///
     /// An output is drawn when something changed outside the animation, or while its

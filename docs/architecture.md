@@ -94,7 +94,7 @@ moves the rectangle; no pixels move, and nothing is re-uploaded.
 `Motion::Running`. When every animation settles, the daemon stops submitting. Each
 output schedules itself, so a 60 Hz panel is never dragged along by a 180 Hz one.
 
-Waking up again correctly takes five rules:
+Waking up again correctly takes six rules:
 
 - _Drain before sleeping._ Presenting reads the Wayland connection itself, so a frame
   callback can land in our queue with nothing left on the descriptor for the event loop
@@ -117,6 +117,12 @@ Waking up again correctly takes five rules:
   callback marks itself dirty, so the frame is drawn once it is allowed to be. This
   matters most for an output nobody can see: a fully occluded surface gets very few
   callbacks, and the one it does get must still present the finished state.
+- _Draw a change that started no animation._ `Motion::Running` is the daemon's whole
+  evidence that anything changed, and it is true only of a move that takes time. A
+  `duration-ms` of `0` snaps and has settled by the next pass; `scroll.<axis>.max-shift`
+  and the blur's look are read where the frame is built and never animate at all. Both
+  leave the state correct and the screen stale until some unrelated animation happens to
+  carry it on, so `Daemon::resolve` and a reload call `Renderer::invalidate` instead.
 
 The rule lives in `render::wayland::surface::Pacing` as one `plan` function over three
 flags, where it is tested without a display.

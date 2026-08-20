@@ -316,8 +316,12 @@ impl Daemon {
             let targets = policy::resolve(id, &self.driven, &self.signals, &state.params);
             let channels = self.driven.output(id);
             // Read at sample time rather than animated toward, so it is assigned here
-            // rather than reaching the state through `Targets`.
-            state.stride = channels.stride();
+            // rather than reaching the state through `Targets`. A change to it moves the
+            // sampled rect with the position standing still, which is what opening a
+            // workspace does, so it is one of the two things owing a frame below.
+            let stride = channels.stride();
+            let restrided = state.stride != stride;
+            state.stride = stride;
             debug!(
                 output = %id,
                 driven = %format!("{:.3},{:.3}", channels.x.at, channels.y.at),
@@ -329,6 +333,11 @@ impl Daemon {
             );
             let moves = state.apply(&targets);
             self.clocks.insert(id.clone(), now);
+            // A move that takes time is drawn because it is still running. One of no
+            // duration has settled by the next pass, so this is the only report of it.
+            if restrided || moves != Moves::default() {
+                self.renderer.invalidate(id);
+            }
             announce_moves(&mut self.subscribers, id, moves);
         }
     }
@@ -513,6 +522,10 @@ impl Daemon {
             if let Some(state) = self.states.get_mut(&id) {
                 state.apply_params(params);
             }
+            // Several parameters are read where the frame is built rather than eased
+            // toward -- `scroll.<axis>.max-shift` and the whole of the blur's look -- so
+            // an edit touching only those starts no animation to be drawn by.
+            self.renderer.invalidate(&id);
         }
         // After the params, since that is where the edited fallback arrives. It reaches
         // only the outputs actually showing one: what was set over the socket owns its

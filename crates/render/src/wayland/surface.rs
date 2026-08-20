@@ -198,6 +198,18 @@ mod tests {
     }
 
     #[test]
+    fn a_change_that_started_no_animation_is_still_drawn() {
+        // A snap of no duration, or a reloaded parameter the rect is built from. Both
+        // leave every value settled, so `dirty` is the whole of the evidence here.
+        let mut pacing = Pacing::default();
+        present(&mut pacing, SETTLED);
+        assert_eq!(pacing.plan(DRAWABLE, SETTLED), Pass::Skip);
+
+        pacing.dirty = true;
+        assert_eq!(pacing.plan(DRAWABLE, SETTLED), Pass::Draw);
+    }
+
+    #[test]
     fn an_unconfigured_output_is_never_drawn() {
         let pacing = Pacing { dirty: true, ..Pacing::default() };
         assert_eq!(pacing.plan(false, RUNNING), Pass::Skip);
