@@ -1,4 +1,4 @@
-use domain::{Channels, Driven, OutputId};
+use domain::{Channels, Driven, OutputId, Stop};
 
 /// One thing a compositor backend drives, already normalized.
 #[derive(Clone, Debug, PartialEq)]
@@ -10,10 +10,14 @@ pub enum Drive {
     },
     /// Where this output's wallpaper sits, each axis normalized to `0..=1`, with `0.5`
     /// for an axis the backend does not drive. Anything else is brought into range.
+    ///
+    /// Each axis carries the distance one of its stops covers as well as its position,
+    /// because how far a single move goes is the backend's to know and nothing
+    /// downstream can recover it from a position alone.
     Scrolled {
         output: OutputId,
-        x: f32,
-        y: f32,
+        x: Stop,
+        y: Stop,
     },
     Blurred {
         output: OutputId,
@@ -33,8 +37,8 @@ impl Drive {
             Drive::OutputsChanged { outputs } => apply_outputs(driven, outputs),
             Drive::Scrolled { output, x, y } => {
                 let entry = driven.outputs.entry(output.clone()).or_default();
-                let moved_x = replace(&mut entry.scroll_x, Channels::position(*x));
-                let moved_y = replace(&mut entry.scroll_y, Channels::position(*y));
+                let moved_x = replace(&mut entry.x, Stop::read(x.at, x.stride));
+                let moved_y = replace(&mut entry.y, Stop::read(y.at, y.stride));
                 moved_x || moved_y
             }
             Drive::Blurred { output, on } => {
@@ -81,8 +85,14 @@ mod tests {
         OutputId::new(name)
     }
 
+    /// A position on each axis with a stride to match, which is what a compositor with
+    /// three stops reports.
     fn scrolled(name: &str, x: f32, y: f32) -> Drive {
-        Drive::Scrolled { output: output(name), x, y }
+        Drive::Scrolled {
+            output: output(name),
+            x: Stop { at: x, stride: 0.5 },
+            y: Stop { at: y, stride: 0.5 },
+        }
     }
 
     #[test]
@@ -91,6 +101,38 @@ mod tests {
         let event = scrolled("DP-1", 0.25, 0.75);
         assert!(event.apply_to(&mut driven));
         assert!(!event.apply_to(&mut driven));
+    }
+
+    /// A workspace opening while the active one stays put moves no position but does
+    /// change how far a stop is, and the cap downstream reads that. Reported as unchanged
+    /// it would never be re-resolved.
+    #[test]
+    fn a_stride_changing_on_its_own_is_a_change() {
+        let mut driven = Driven::default();
+        scrolled("DP-1", 0.0, 0.0).apply_to(&mut driven);
+
+        let widened = Drive::Scrolled {
+            output: output("DP-1"),
+            x: Stop { at: 0.0, stride: 0.25 },
+            y: Stop { at: 0.0, stride: 0.25 },
+        };
+        assert!(widened.apply_to(&mut driven));
+        assert_eq!(driven.output(&output("DP-1")).y.stride, 0.25);
+    }
+
+    #[test]
+    fn a_stride_that_is_not_a_number_reads_as_no_stride() {
+        let mut driven = Driven::default();
+        let event = Drive::Scrolled {
+            output: output("DP-1"),
+            x: Stop { at: 0.25, stride: f32::NAN },
+            y: Stop { at: 0.25, stride: 2.0 },
+        };
+
+        assert!(event.apply_to(&mut driven));
+        assert_eq!(driven.output(&output("DP-1")).x.stride, 0.0);
+        assert_eq!(driven.output(&output("DP-1")).y.stride, 1.0, "brought into range");
+        assert!(!event.apply_to(&mut driven), "a value differing from itself is not movement");
     }
 
     #[test]
@@ -105,8 +147,8 @@ mod tests {
         let mut driven = Driven::default();
         scrolled("DP-1", -3.0, 42.0).apply_to(&mut driven);
 
-        assert_eq!(driven.output(&output("DP-1")).scroll_x, 0.0);
-        assert_eq!(driven.output(&output("DP-1")).scroll_y, 1.0);
+        assert_eq!(driven.output(&output("DP-1")).x.at, 0.0);
+        assert_eq!(driven.output(&output("DP-1")).y.at, 1.0);
     }
 
     #[test]
@@ -115,7 +157,7 @@ mod tests {
         let event = scrolled("DP-1", f32::NAN, 0.25);
 
         assert!(event.apply_to(&mut driven));
-        assert_eq!(driven.output(&output("DP-1")).scroll_x, Channels::default().scroll_x);
+        assert_eq!(driven.output(&output("DP-1")).x.at, Channels::default().x.at);
         assert!(!event.apply_to(&mut driven), "a value differing from itself is not movement");
     }
 
@@ -125,10 +167,10 @@ mod tests {
         scrolled("DP-1", 0.0, 0.25).apply_to(&mut driven);
         scrolled("eDP-1", 1.0, 0.75).apply_to(&mut driven);
 
-        assert_eq!(driven.output(&output("DP-1")).scroll_x, 0.0);
-        assert_eq!(driven.output(&output("DP-1")).scroll_y, 0.25);
-        assert_eq!(driven.output(&output("eDP-1")).scroll_x, 1.0);
-        assert_eq!(driven.output(&output("eDP-1")).scroll_y, 0.75);
+        assert_eq!(driven.output(&output("DP-1")).x.at, 0.0);
+        assert_eq!(driven.output(&output("DP-1")).y.at, 0.25);
+        assert_eq!(driven.output(&output("eDP-1")).x.at, 1.0);
+        assert_eq!(driven.output(&output("eDP-1")).y.at, 0.75);
     }
 
     #[test]
@@ -179,7 +221,7 @@ mod tests {
         scrolled("DP-1", 0.0, 0.25).apply_to(&mut driven);
         event.apply_to(&mut driven);
 
-        assert_eq!(driven.output(&output("DP-1")).scroll_y, 0.25);
+        assert_eq!(driven.output(&output("DP-1")).y.at, 0.25);
     }
 
     #[test]

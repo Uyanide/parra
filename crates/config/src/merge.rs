@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use domain::anim::seconds_from_millis;
-use domain::params::MIN_CROP_RATIO;
+use domain::params::{MAX_SHIFT, MIN_CROP_RATIO};
 use domain::{
     AxisParams, BlurParams, Easing, OutputId, OutputParams, ScrollParams, SurfaceParams,
     TransitionParams, Tween, WallpaperRef, ZoomParams,
@@ -206,6 +206,7 @@ fn apply_scroll(params: &mut ScrollParams, section: &ScrollSection, prefix: &str
 
 fn apply_axis(params: &mut AxisParams, section: &AxisSection, path: &str) -> Result<()> {
     set_ratio(&mut params.travel, section.travel, &format!("{path}.travel"))?;
+    set_cap(&mut params.max_shift, section.max_shift, &format!("{path}.max-shift"))?;
     apply_tween(&mut params.tween, section.duration_ms, section.easing, path)
 }
 
@@ -289,6 +290,19 @@ fn set_ratio(slot: &mut f32, value: Option<f32>, key: &str) -> Result<()> {
             return Err(Invalid::new(key, "expected a number in 0..=1"));
         }
         *slot = value;
+    }
+    Ok(())
+}
+
+/// Zero lifts the cap, which is how an output asks for the whole travel back once
+/// something above it has capped one. Pinning an axis is `travel = 0` and only that, so a
+/// zero here must not mean it too.
+fn set_cap(slot: &mut Option<f32>, value: Option<f32>, key: &str) -> Result<()> {
+    if let Some(value) = value {
+        if !value.is_finite() || !(0.0..=MAX_SHIFT).contains(&value) {
+            return Err(Invalid::new(key, format!("expected a number in 0..={MAX_SHIFT}")));
+        }
+        *slot = (value > 0.0).then_some(value);
     }
     Ok(())
 }
@@ -624,6 +638,8 @@ mod tests {
     fn out_of_range_values_name_the_offending_key() {
         let cases = [
             ("[scroll.vertical]\ntravel = 1.5\n", "scroll.vertical.travel"),
+            ("[scroll.vertical]\nmax-shift = 20.0\n", "scroll.vertical.max-shift"),
+            ("[scroll.horizontal]\nmax-shift = -0.1\n", "scroll.horizontal.max-shift"),
             ("[scroll.horizontal]\nduration-ms = 999999\n", "scroll.horizontal.duration-ms"),
             ("[blur]\nradius = 9999\n", "blur.radius"),
             ("[blur]\ndownscale = 0\n", "blur.downscale"),
@@ -635,6 +651,31 @@ mod tests {
             let error = parse(text).expect_err(text);
             assert_eq!(error.key, expected);
         }
+    }
+
+    #[test]
+    fn a_shift_cap_is_read_per_axis() {
+        let config = parse("[scroll.vertical]\nmax-shift = 0.25\n").unwrap();
+        assert_eq!(config.global.scroll.vertical.max_shift, Some(0.25));
+        assert_eq!(
+            config.global.scroll.horizontal.max_shift,
+            AxisParams::default().max_shift,
+            "the other axis keeps the default"
+        );
+    }
+
+    /// Zero is how one monitor asks for the whole travel back, which is why it lifts the
+    /// cap rather than pinning the axis the way `travel = 0` does.
+    #[test]
+    fn a_zero_shift_cap_lifts_it_rather_than_pinning_the_axis() {
+        let config = parse(
+            "[scroll.vertical]\nmax-shift = 0.25\n\n             [output.\"DP-1\".scroll.vertical]\nmax-shift = 0\n",
+        )
+        .unwrap();
+
+        assert_eq!(config.for_output(&dp1()).scroll.vertical.max_shift, None);
+        assert_eq!(config.for_output(&dp1()).scroll.vertical.travel, 1.0, "still moves");
+        assert_eq!(config.global.scroll.vertical.max_shift, Some(0.25));
     }
 
     #[test]

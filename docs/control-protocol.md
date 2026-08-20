@@ -42,15 +42,15 @@ was replaced. Restarting the daemon is the whole fix.
 
 ## Requests
 
-| Request                                                 | Meaning                                                                                                                      |
-| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `"get-state"`                                           | Every output.                                                                                                                |
-| `{"get-output":{"output":"DP-1"}}`                      | One output.                                                                                                                  |
-| `{"set-wallpaper":{"output":null,"path":"/srv/a.png"}}` | Show an image and remember it. A `null` path empties the slot instead; `"save":false` does not remember either.              |
-| `{"set-blur":{"output":"DP-1","on":true}}`              | External blur signal. `null` broadcasts, and a broadcast also clears any per-output requests. |
-| `"reload-config"`                                       | Re-read the config file.                                                                                                     |
-| `"subscribe"`                                           | Turn this connection into a stream of [events](#events).                                                                     |
-| `"ping"`                                                | Liveness, and the protocol version.                                                                                          |
+| Request                                                 | Meaning                                                                                                         |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `"get-state"`                                           | Every output.                                                                                                   |
+| `{"get-output":{"output":"DP-1"}}`                      | One output.                                                                                                     |
+| `{"set-wallpaper":{"output":null,"path":"/srv/a.png"}}` | Show an image and remember it. A `null` path empties the slot instead; `"save":false` does not remember either. |
+| `{"set-blur":{"output":"DP-1","on":true}}`              | External blur signal. `null` broadcasts, and a broadcast also clears any per-output requests.                   |
+| `"reload-config"`                                       | Re-read the config file.                                                                                        |
+| `"subscribe"`                                           | Turn this connection into a stream of [events](#events).                                                        |
+| `"ping"`                                                | Liveness, and the protocol version.                                                                             |
 
 `set-wallpaper` takes an absolute path: the daemon's working directory is not the
 caller's. The daemon refuses anything that is not a file while the client is still on the
@@ -93,7 +93,7 @@ start. The daemon also watches the configuration file on its own; see
 | Response                      | Meaning                      |
 | ----------------------------- | ---------------------------- |
 | `"done"`                      | The request was carried out. |
-| `{"pong":{"version":2}}`      | Protocol version.            |
+| `{"pong":{"version":3}}`      | Protocol version.            |
 | `{"state":{...}}`             | A `StateSnapshot`.           |
 | `{"output":{...}}`            | One `OutputSnapshot`.        |
 | `{"error":{"message":"..."}}` | The request was refused.     |
@@ -102,7 +102,7 @@ start. The daemon also watches the configuration file on its own; see
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "namespace": "...",
   "frames": 442,
   "texture_bytes": 56173364,
@@ -125,8 +125,8 @@ start. The daemon also watches the configuration file on its own; see
       },
       "zoom": { "current": 1.111, "target": 1.111 },
       "channels": {
-        "scroll_x": 0.5,
-        "scroll_y": 0.333,
+        "x": { "at": 0.5, "stride": 0.0 },
+        "y": { "at": 0.333, "stride": 0.25 },
         "blur": true,
         "zoom_out": false
       },
@@ -138,8 +138,14 @@ start. The daemon also watches the configuration file on its own; see
 ```
 
 `channels` is what the compositor is driving this output to, before any configuration is
-applied: two scroll positions normalized to `0..=1`, and whether the output should be
-blurred or zoomed out. The animated values elsewhere are where those have got to.
+applied: two scroll axes, and whether the output should be blurred or zoomed out. The
+animated values elsewhere are where those have got to.
+
+Each axis is an `at` normalized to `0..=1` and the `stride` one of its stops covers in the
+same units -- `1 / (stops - 1)`, or `0` for an axis that pans continuously or has nothing to
+travel between. `stride` is what turns
+[`max-shift`](config.md#a-maximum-shift) from a distance in screens into a fraction, and it
+changes when workspaces or columns open and close.
 
 Animated values report both ends. `current` answers "what is on screen", `target`
 answers "where is it going"; a widget that wants to move with the wallpaper needs the

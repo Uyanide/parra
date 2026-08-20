@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use domain::{OutputId, ScrollState};
+use domain::{OutputId, Stop};
 
 use super::wire::{Event, Window, Workspace};
 use super::{Axis, Params};
@@ -34,15 +34,17 @@ struct WorkspaceSlot {
     active: bool,
 }
 
-/// Maps a one-based position within `count` onto `0..=1`.
+/// Maps a one-based position within `count` onto `0..=1`, beside the distance one place
+/// in that sequence covers.
 ///
-/// A lone or not-yet-known position sits centred, having nothing to travel between.
-fn progress(idx: u32, count: u32) -> f32 {
+/// A lone or not-yet-known position sits centred, having nothing to travel between, and
+/// reports no stride for the same reason.
+fn progress(idx: u32, count: u32) -> Stop {
     if count <= 1 || idx == 0 {
-        return ScrollState::CENTRE;
+        return Stop::CENTRED;
     }
-    let position = idx.min(count) - 1;
-    position as f32 / (count - 1) as f32
+    let span = (count - 1) as f32;
+    Stop { at: (idx.min(count) - 1) as f32 / span, stride: 1.0 / span }
 }
 
 impl Tracker {
@@ -127,14 +129,14 @@ impl Tracker {
     }
 
     /// Where one axis sits, given what it was configured to follow.
-    fn axis(&self, output: &OutputId, axis: Axis, workspace: (u32, u32)) -> f32 {
+    fn axis(&self, output: &OutputId, axis: Axis, workspace: (u32, u32)) -> Stop {
         match axis {
             Axis::Workspace => progress(workspace.0, workspace.1),
             Axis::Column => {
                 let (idx, count) = self.columns_on(output);
                 progress(idx, count)
             }
-            Axis::None => ScrollState::CENTRE,
+            Axis::None => Stop::CENTRED,
         }
     }
 
@@ -297,7 +299,7 @@ mod tests {
         tracker
     }
 
-    fn scroll_of(drives: &[Drive], want: &str) -> (f32, f32) {
+    fn scroll_of(drives: &[Drive], want: &str) -> (Stop, Stop) {
         drives
             .iter()
             .find_map(|drive| match drive {
@@ -308,11 +310,15 @@ mod tests {
     }
 
     fn vertical_of(drives: &[Drive], want: &str) -> f32 {
-        scroll_of(drives, want).1
+        scroll_of(drives, want).1.at
     }
 
     fn horizontal_of(drives: &[Drive], want: &str) -> f32 {
-        scroll_of(drives, want).0
+        scroll_of(drives, want).0.at
+    }
+
+    fn vertical_stride_of(drives: &[Drive], want: &str) -> f32 {
+        scroll_of(drives, want).1.stride
     }
 
     fn blurred(drives: &[Drive]) -> Vec<&str> {
@@ -353,21 +359,53 @@ mod tests {
 
     #[test]
     fn a_position_spans_the_sequence() {
-        assert_eq!(progress(1, 4), 0.0);
-        assert!((progress(2, 4) - 1.0 / 3.0).abs() < 1e-6);
-        assert_eq!(progress(4, 4), 1.0);
+        assert_eq!(progress(1, 4).at, 0.0);
+        assert!((progress(2, 4).at - 1.0 / 3.0).abs() < 1e-6);
+        assert_eq!(progress(4, 4).at, 1.0);
     }
 
     #[test]
     fn a_lone_or_unknown_position_is_centred() {
-        assert_eq!(progress(1, 1), 0.5);
-        assert_eq!(progress(0, 0), 0.5);
-        assert_eq!(progress(0, 5), 0.5);
+        assert_eq!(progress(1, 1), Stop::CENTRED);
+        assert_eq!(progress(0, 0), Stop::CENTRED);
+        assert_eq!(progress(0, 5), Stop::CENTRED);
+    }
+
+    #[test]
+    fn a_stride_is_the_distance_one_place_in_the_sequence_covers() {
+        assert_eq!(progress(1, 2).stride, 1.0, "two stops, so one covers everything");
+        assert_eq!(progress(1, 3).stride, 0.5);
+        assert!((progress(3, 5).stride - 0.25).abs() < 1e-6);
+    }
+
+    /// What the shift cap reads, so a workspace opening has to loosen it.
+    #[test]
+    fn opening_a_stop_shortens_the_stride() {
+        assert!(progress(1, 6).stride < progress(1, 3).stride);
+    }
+
+    #[test]
+    fn an_axis_with_nothing_to_travel_between_reports_no_stride() {
+        assert_eq!(progress(1, 1).stride, 0.0);
+        assert_eq!(progress(0, 5).stride, 0.0, "a position nothing has reported yet");
+    }
+
+    #[test]
+    fn an_axis_the_backend_does_not_drive_reports_no_stride() {
+        let drives = populated().drives(&everywhere(DEFAULTS));
+        assert_eq!(scroll_of(&drives, "DP-1").0, Stop::CENTRED, "horizontal follows nothing");
+    }
+
+    #[test]
+    fn each_output_reports_the_stride_of_its_own_workspaces() {
+        let drives = populated().drives(&everywhere(DEFAULTS));
+        assert_eq!(vertical_stride_of(&drives, "DP-1"), 0.5, "three workspaces");
+        assert_eq!(vertical_stride_of(&drives, "eDP-1"), 1.0, "two workspaces");
     }
 
     #[test]
     fn an_out_of_range_position_stays_in_bounds() {
-        assert_eq!(progress(9, 4), 1.0);
+        assert_eq!(progress(9, 4).at, 1.0);
     }
 
     #[test]

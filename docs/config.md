@@ -72,10 +72,10 @@ later, rather than a configuration error.
 The only section whose keys differ between compositors, since it is the only one that
 names things the compositor has. Under niri it says which position moves each axis:
 
-| Key          | Default       | Meaning                                                       |
-| ------------ | ------------- | ------------------------------------------------------------- |
-| `vertical`   | `"workspace"` | `"workspace"`, `"column"` or `"none"`.                        |
-| `horizontal` | `"none"`      | Same values. `"none"` leaves the axis pinned to its centre.   |
+| Key          | Default       | Meaning                                                     |
+| ------------ | ------------- | ----------------------------------------------------------- |
+| `vertical`   | `"workspace"` | `"workspace"`, `"column"` or `"none"`.                      |
+| `horizontal` | `"none"`      | Same values. `"none"` leaves the axis pinned to its centre. |
 
 ```toml
 [compositor]
@@ -110,14 +110,15 @@ moves, including `0` to pin it.
 
 ### `[scroll.vertical]` and `[scroll.horizontal]`
 
-The two parallax axes take the same three keys and are configured apart. What moves each
+The two parallax axes take the same four keys and are configured apart. What moves each
 one is `[compositor]` above; these say how far and how fast it moves. Both are per output.
 
-| Key           | Default       | Meaning                                                                      |
-| ------------- | ------------- | ---------------------------------------------------------------------------- |
-| `travel`      | `1.0`         | Fraction of the available travel to use, `0..=1`, measured about the centre. |
-| `duration-ms` | `300`         | `0` makes the move instant. Capped at 60000.                                 |
-| `easing`      | `"out-cubic"` | See [easing functions](#easing-functions).                                   |
+| Key           | Default       | Meaning                                                                                      |
+| ------------- | ------------- | -------------------------------------------------------------------------------------------- |
+| `travel`      | `1.0`         | Fraction of the available travel to use, `0..=1`, measured about the centre.                 |
+| `max-shift`   | `0.5`         | Furthest the image may move between two adjacent stops, in screens. `0` lifts it. See below. |
+| `duration-ms` | `300`         | `0` makes the move instant. Capped at 60000.                                                 |
+| `easing`      | `"out-cubic"` | See [easing functions](#easing-functions).                                                   |
 
 ```toml
 [scroll.vertical]
@@ -130,6 +131,63 @@ duration-ms = 250   # travel and easing stay at their defaults
 There is no `enabled` key. `travel = 0` pins an axis to its centre, and so does
 `[compositor]` naming nothing for it, so a third way to say it would only be a way to
 disagree with itself.
+
+#### A maximum shift
+
+`travel` is a fraction of the **available travel**, which is whatever the cover fit and
+[`zoom`](#zoom) leave outside the screen. That is a different distance on every wallpaper: a
+2937x4796 image on a 2560x1440 screen has 2.2 screen heights of it, and with three
+workspaces one switch drags the image over a screen height in 300 ms.
+
+`max-shift` is the same distance said in units the screen supplies. It is measured in screen
+heights on the vertical axis and screen widths on the horizontal one, and it caps how far
+the image moves between two **adjacent** stops -- the next workspace along, or the next
+column.
+
+```toml
+[scroll.vertical]
+max-shift = 0.5   # one workspace along never moves the image more than half a screen
+```
+
+Adjacent is the word that matters. Under niri a workspace switch can cross several stops at
+once, and such a jump still moves several times the cap -- a long jump earning a long scroll
+is the point, not a fault.
+
+It follows that **more stops loosen the cap rather than tighten it**. One stop of the travel
+is `1 / (stops - 1)` of it, so the more stops an axis has, the shorter each one already is
+and the less there is to cap. On the wallpaper above, at `max-shift = 0.5`:
+
+| workspaces | one switch, uncapped | with the cap | the image's total movement |
+| ---------- | -------------------- | ------------ | -------------------------- |
+| 2          | 2.23 screens         | 0.50         | 0.50                       |
+| 3          | 1.11                 | 0.50         | 1.00                       |
+| 5          | 0.56                 | 0.50         | 2.00                       |
+| 6          | 0.45                 | 0.45         | 2.23, the whole image      |
+
+So a long wallpaper is still used in full once there are enough workspaces to reach across
+it gently, and it is only the short jump on a long image that is held back.
+
+Four more things follow:
+
+- `travel` still has its say. It narrows the range a stop is taken from, so `travel = 0.5`
+  halves the distance the cap is measuring and the cap correspondingly does half as much.
+- **`0` lifts the cap**, it does not pin the axis. `travel = 0` is what pins one, and this
+  is how one monitor asks for the whole travel back:
+
+  ```toml
+  [scroll.vertical]
+  max-shift = 0.5
+
+  [output."DP-1".scroll.vertical]
+  max-shift = 0     # the big monitor may use the whole image
+  ```
+
+- It cannot invent travel an axis does not have. A wallpaper the shape of the screen has
+  almost none, so the default never reaches it and nothing about such a setup changes.
+- Unlike `[compositor]`, it is **live**: a reload applies it without a restart.
+
+A compositor that pans the wallpaper continuously rather than in stops has no adjacent stop
+to measure, and `max-shift` does nothing there.
 
 ### `[blur]`
 
@@ -153,11 +211,11 @@ different scales.
 
 ### `[zoom]`
 
-| Key           | Default       | Meaning                                                                                                                                                                                                        |
-| ------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Key           | Default       | Meaning                                                                                                                                                                                              |
+| ------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `crop-ratio`  | `0.9`         | Fraction of the image visible while zoomed in, `0.25..=1`. The remainder is the headroom the parallax travels through, so `1.0` leaves nothing to scroll unless the image is taller than the screen. |
-| `duration-ms` | `300`         |                                                                                                                                                                                                                |
-| `easing`      | `"out-cubic"` | See [easing functions](#easing-functions).                                                                                                                                                                     |
+| `duration-ms` | `300`         |                                                                                                                                                                                                      |
+| `easing`      | `"out-cubic"` | See [easing functions](#easing-functions).                                                                                                                                                           |
 
 An output zooms back out to the whole image when the compositor drives it to, which under
 niri means the overview is open.
@@ -170,11 +228,11 @@ driver reports.
 
 ### `[transition]`
 
-| Key           | Default          | Meaning                                                                       |
-| ------------- | ---------------- | ----------------------------------------------------------------------------- |
-| `mode`        | `"fade"`         | `"fade"` crossfades the outgoing wallpaper into the incoming one. `"none"` swaps outright. |
+| Key           | Default          | Meaning                                                                                     |
+| ------------- | ---------------- | ------------------------------------------------------------------------------------------- |
+| `mode`        | `"fade"`         | `"fade"` crossfades the outgoing wallpaper into the incoming one. `"none"` swaps outright.  |
 | `duration-ms` | `800`            | Longer than the other sections, since replacing the image is a larger event than moving it. |
-| `easing`      | `"in-out-cubic"` |                                                                               |
+| `easing`      | `"in-out-cubic"` |                                                                                             |
 
 A fade holds both wallpapers, and both of their blurs, until it finishes. That is about
 19 MB extra on a 2560x1440 output at the default `crop-ratio`, and it scales with the

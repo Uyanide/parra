@@ -39,12 +39,24 @@ pub struct ScrollParams {
 pub struct AxisParams {
     /// Fraction of the available travel to use, about the centre. 0 pins it there.
     pub travel: f32,
+    /// Greatest distance the image may move between two adjacent stops, in screen extents
+    /// of this axis. `None` lifts the cap.
+    ///
+    /// Applied where the rect is built rather than beside `travel`, because it is a
+    /// distance rather than a fraction, and the layer that builds the rect is the only one
+    /// holding the image size, the viewport size and the zoom the axis is actually at.
+    pub max_shift: Option<f32>,
     pub tween: Tween,
 }
 
+/// Furthest a shift cap can usefully be asked to allow. Past the available travel a cap
+/// does nothing, so the bound only exists to stop a number written in pixels reading as no
+/// cap at all.
+pub const MAX_SHIFT: f32 = 16.0;
+
 impl Default for AxisParams {
     fn default() -> Self {
-        Self { travel: 1.0, tween: Tween::new(0.3, Easing::OutCubic) }
+        Self { travel: 1.0, max_shift: Some(0.5), tween: Tween::new(0.3, Easing::OutCubic) }
     }
 }
 

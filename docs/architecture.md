@@ -200,15 +200,38 @@ other order segfaults in the driver after the last log line.
 
 ## The four channels
 
-A backend drives four values and nothing else: two scroll positions normalized to `0..=1`,
-and two booleans for whether an output should be blurred and whether it should be zoomed
-out. They are the animated channels themselves, so `policy::resolve` applies configuration
-to them rather than deciding what they stand for.
+A backend drives four values and nothing else: two scroll axes normalized to `0..=1`, and
+two booleans for whether an output should be blurred and whether it should be zoomed out.
+They are the animated channels themselves, so `policy::resolve` applies configuration to
+them rather than deciding what they stand for.
 
 The vocabulary stops there on purpose. `domain::Channels` is the whole of what a compositor
 can say here, and a backend with something else to report changes `domain` before it
 changes anything else. What the ceiling buys is that `Drive` carries no compositor's words,
 so niri's workspaces and columns reach nothing outside its own backend.
+
+**An axis is a position and a stride.** `domain::Stop` pairs where the axis sits with the
+distance one of its stops covers, and that second number is there because `scroll.<axis>.max-shift`
+is a distance in screens: turning it into a fraction needs to know how far a single move
+goes, and a position alone cannot say. Only a backend knows what a stop is, so only a
+backend can answer it.
+
+That is a fifth number on the wire, and it is worth saying why it does not put the
+discrete-indexed shape back. The stop **count** would: a compositor moving continuously has
+nothing to put in it, and the `Option` it would need is the tell. A stride does not. It is
+normalized like the position beside it, and `0` is a real answer -- *this axis pans
+continuously and therefore never jumps* -- which is also where an undriven output already
+sits. niri's tape, where one switch may cross several stops, and a compositor that swipes
+exactly one workspace however far the jump, are both stated in it; the difference stays
+inside each backend's own `progress`.
+
+The configuration half does not travel the other way. `max-shift` is applied in
+`geometry::sample_rect`, which is the only layer holding the image size, the viewport size
+and the zoom the axis is actually at, and which runs per wallpaper slot and per frame. So a
+resize, a hotplug, a wallpaper swap and the overview animation all come out right with
+nothing to re-resolve, and `compositor` goes on reading no shared configuration at all.
+Sending it a cap instead would mean a backend reading geometry it cannot see, at connect
+time, and never hearing that any of it changed.
 
 Everything is per output. That niri blurs at most one output at a time, and zooms every
 output out together, are niri's rules rather than the boundary's: its backend states a

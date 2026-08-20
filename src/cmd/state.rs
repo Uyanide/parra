@@ -69,7 +69,13 @@ fn print_output(output: &OutputSnapshot) {
         flags.join(" ")
     );
     println!("  wallpaper  {}", cmd::path_or_none(output.wallpaper.as_deref()));
-    println!("  driven     x {:.3}  y {:.3}", output.channels.scroll_x, output.channels.scroll_y);
+    println!(
+        "  driven     x {:.3}  y {:.3}  (stride {:.3}, {:.3})",
+        output.channels.x.at,
+        output.channels.y.at,
+        output.channels.x.stride,
+        output.channels.y.stride
+    );
     println!(
         "  scroll     v {}  h {}",
         tween(output.scroll.vertical),

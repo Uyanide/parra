@@ -1,10 +1,10 @@
 use crate::anim::{Motion, Move};
 use crate::blur::BlurState;
-use crate::geometry::{UvRect, sample_rect};
+use crate::geometry::{Limit, Limits, UvRect, sample_rect};
 use crate::output::{LogicalSize, OutputId, PixelSize, Scale};
 use crate::params::OutputParams;
 use crate::policy::Targets;
-use crate::scroll::ScrollState;
+use crate::scroll::{ScrollState, Stride};
 use crate::wallpaper::{Swap, WallpaperRef, WallpaperSlot};
 use crate::zoom::ZoomState;
 
@@ -33,6 +33,10 @@ pub struct MonitorState {
     pub params: OutputParams,
     pub wallpaper: WallpaperSlot,
     pub scroll: ScrollState,
+    /// How far one stop of each axis is, as the compositor last reported it. Assigned from
+    /// outside like the geometry is, because it describes what drives the axis rather than
+    /// anything the axis is animating toward.
+    pub stride: Stride,
     pub blur: BlurState,
     pub zoom: ZoomState,
 }
@@ -47,6 +51,7 @@ impl MonitorState {
             scale: Scale::ONE,
             wallpaper: WallpaperSlot::new(),
             scroll: ScrollState::new(),
+            stride: Stride::default(),
             blur: BlurState::new(),
             zoom: ZoomState::new(params.zoom.factor()),
             params,
@@ -68,7 +73,24 @@ impl MonitorState {
             self.zoom.factor.value(),
             self.scroll.h.value(),
             self.scroll.v.value(),
+            self.limits(),
         )
+    }
+
+    /// What caps each axis, which is the configured shift beside the stride it applies to.
+    ///
+    /// `travel` has already narrowed the range the position is driven over by the time it
+    /// reaches here, so a stop covers that much less of it. Folding the two together is
+    /// what keeps `travel` applied in one place.
+    fn limits(&self) -> Limits {
+        let axis = |stride: f32, params: &crate::params::AxisParams| Limit {
+            stride: stride * params.travel,
+            max_shift: params.max_shift,
+        };
+        Limits {
+            h: axis(self.stride.h, &self.params.scroll.horizontal),
+            v: axis(self.stride.v, &self.params.scroll.vertical),
+        }
     }
 
     /// Adopts a reloaded configuration.
@@ -153,6 +175,54 @@ mod tests {
         assert_eq!(state.tick(0.1), Motion::Running);
         assert_eq!(state.tick(10.0), Motion::Settled);
         assert_eq!(state.blur.amount.value(), 1.0);
+    }
+
+    /// Much taller than the screen, so the default cap has something to bite on.
+    const TALL: PixelSize = PixelSize { w: 2937, h: 4796 };
+
+    /// How far the wallpaper moves between the two ends of the vertical axis, in screen
+    /// heights.
+    fn excursion(state: &mut MonitorState) -> f32 {
+        state.scroll.v.snap(0.0);
+        let top = state.sample_rect(TALL);
+        state.scroll.v.snap(1.0);
+        let bottom = state.sample_rect(TALL);
+        (bottom.v0 - top.v0) / top.height()
+    }
+
+    #[test]
+    fn an_output_no_stride_was_reported_for_is_not_capped() {
+        let mut state = monitor();
+        assert_eq!(state.stride, Stride::default());
+        assert!(excursion(&mut state) > 2.0, "the whole travel, cap or no cap");
+    }
+
+    #[test]
+    fn the_reported_stride_is_what_the_cap_measures() {
+        let mut state = monitor();
+        state.stride = Stride { v: 1.0, h: 0.0 };
+        assert!((excursion(&mut state) - 0.5).abs() < 1e-4, "one stop held to max-shift");
+
+        state.stride = Stride { v: 0.25, h: 0.0 };
+        assert!((excursion(&mut state) - 2.0).abs() < 1e-4, "four stops of it");
+    }
+
+    /// `travel` has already narrowed the range the position is driven over, so a stop
+    /// covers that much less of it and the cap has correspondingly less to do.
+    #[test]
+    fn travel_shortens_the_stop_the_cap_measures() {
+        let mut state = monitor();
+        state.stride = Stride { v: 1.0, h: 0.0 };
+        state.params.scroll.vertical.travel = 0.5;
+        assert!((excursion(&mut state) - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn lifting_the_cap_gives_the_whole_travel_back() {
+        let mut state = monitor();
+        state.stride = Stride { v: 1.0, h: 0.0 };
+        state.params.scroll.vertical.max_shift = None;
+        assert!(excursion(&mut state) > 2.0);
     }
 
     #[test]

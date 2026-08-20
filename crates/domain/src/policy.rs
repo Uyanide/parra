@@ -2,38 +2,26 @@ use std::collections::BTreeMap;
 
 use crate::output::OutputId;
 use crate::params::{AxisParams, OutputParams};
-use crate::scroll::ScrollState;
+use crate::scroll::{ScrollState, Stop, Stride};
 use crate::wallpaper::WallpaperRef;
 
 /// What the compositor drives on one output, before any configuration is applied.
 ///
 /// Positions are normalized to `0..=1` of the available travel, and an axis the
 /// compositor does not drive sits centred.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Channels {
-    pub scroll_x: f32,
-    pub scroll_y: f32,
+    pub x: Stop,
+    pub y: Stop,
     pub blur: bool,
     pub zoom_out: bool,
 }
 
 impl Channels {
-    /// One reported position, brought into range. NaN differs from itself, so left alone
-    /// it would look like movement on every report.
-    pub fn position(reported: f32) -> f32 {
-        if reported.is_nan() { ScrollState::CENTRE } else { reported.clamp(0.0, 1.0) }
-    }
-}
-
-impl Default for Channels {
-    /// Centred and idle, which is where an output sits until a backend says otherwise.
-    fn default() -> Self {
-        Self {
-            scroll_x: ScrollState::CENTRE,
-            scroll_y: ScrollState::CENTRE,
-            blur: false,
-            zoom_out: false,
-        }
+    /// The strides both axes were last reported at, which is all the geometry needs of
+    /// them.
+    pub fn stride(&self) -> Stride {
+        Stride { v: self.y.stride, h: self.x.stride }
     }
 }
 
@@ -138,8 +126,8 @@ pub fn resolve(
     let blur_on = params.blur.is_enabled() && (channels.blur || signals.blur(output));
 
     Targets {
-        scroll_v: axis(channels.scroll_y, &params.scroll.vertical),
-        scroll_h: axis(channels.scroll_x, &params.scroll.horizontal),
+        scroll_v: axis(channels.y.at, &params.scroll.vertical),
+        scroll_h: axis(channels.x.at, &params.scroll.horizontal),
         blur: if blur_on { 1.0 } else { 0.0 },
         zoom: if channels.zoom_out { 1.0 } else { params.zoom.factor() },
     }
@@ -191,8 +179,8 @@ mod tests {
     #[test]
     fn an_undriven_output_sits_at_the_centre() {
         let channels = Channels::default();
-        assert_eq!(channels.scroll_x, 0.5);
-        assert_eq!(channels.scroll_y, 0.5);
+        assert_eq!(channels.x, Stop::CENTRED);
+        assert_eq!(channels.y, Stop::CENTRED);
         assert_eq!(Driven::default().output(&output("DP-1")), channels);
     }
 
@@ -207,11 +195,16 @@ mod tests {
     #[test]
     fn each_axis_follows_its_own_channel() {
         let id = output("DP-1");
-        let driven = driven(&id, Channels { scroll_x: 1.0, scroll_y: 0.0, ..Channels::default() });
+        let edges = Channels {
+            x: Stop { at: 1.0, stride: 0.5 },
+            y: Stop { at: 0.0, stride: 0.5 },
+            ..Channels::default()
+        };
+        let driven = driven(&id, edges);
         let targets = resolve(&id, &driven, &Signals::default(), &OutputParams::default());
 
-        assert_eq!(targets.scroll_v, 0.0, "the vertical axis follows scroll_y");
-        assert_eq!(targets.scroll_h, 1.0, "the horizontal axis follows scroll_x");
+        assert_eq!(targets.scroll_v, 0.0, "the vertical axis follows the y channel");
+        assert_eq!(targets.scroll_h, 1.0, "the horizontal axis follows the x channel");
     }
 
     #[test]

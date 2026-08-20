@@ -90,9 +90,9 @@ common:
 - [Configuration](docs/config.md) — every key, defaults, per-monitor inheritance
 - [CLI](docs/cli.md) — command syntax, global flags, exit codes
 - [Control protocol](docs/control-protocol.md) — the socket, requests, responses, snapshots
-- [Environment](docs/environment.md) — GPU selection, logging, where files go, and what is
-  deliberately not configurable
+- [Environment](docs/environment.md) — GPU selection, logging, where files go, and other
+  things that is deliberately not configurable
 
 development:
 
-- [Architecture](docs/architecture.md) — what the crates are for and why they are split
+- [Architecture](docs/architecture.md)

@@ -251,6 +251,9 @@ impl Daemon {
         let mut state = MonitorState::new(id.clone(), params, wallpaper);
         state.logical = logical;
         state.scale = scale;
+        // Beside the geometry rather than left to the next resolve: arriving does not set
+        // `stale`, so an output whose compositor says nothing more would draw uncapped.
+        state.stride = self.driven.output(&id).stride();
         state.snap(&policy::resolve(&id, &self.driven, &self.signals, &state.params));
         self.clocks.insert(id.clone(), Instant::now());
         // Snapped, so no animation event will ever carry these values: the arrival does.
@@ -312,9 +315,13 @@ impl Daemon {
         for (id, state) in &mut self.states {
             let targets = policy::resolve(id, &self.driven, &self.signals, &state.params);
             let channels = self.driven.output(id);
+            // Read at sample time rather than animated toward, so it is assigned here
+            // rather than reaching the state through `Targets`.
+            state.stride = channels.stride();
             debug!(
                 output = %id,
-                driven = %format!("{:.3},{:.3}", channels.scroll_x, channels.scroll_y),
+                driven = %format!("{:.3},{:.3}", channels.x.at, channels.y.at),
+                stride = %format!("{:.3},{:.3}", channels.x.stride, channels.y.stride),
                 scroll = %format!("{:.3},{:.3}", targets.scroll_h, targets.scroll_v),
                 blur = targets.blur,
                 zoom = targets.zoom,

@@ -1,12 +1,12 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use domain::{Driven, Easing, LogicalSize, MonitorState, Move, OutputId, Rgba, Swap};
+use domain::{Driven, Easing, LogicalSize, MonitorState, Move, OutputId, Rgba, Stop, Swap};
 use serde::{Deserialize, Serialize};
 
 /// Bumped whenever the wire format changes, including when it only gains a field.
 /// `Ping` reports it, which is the only way to tell a stale daemon from an unreachable one.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Every duration on the wire is in microseconds, so nothing has to be read twice to
 /// find out which unit it is in.
@@ -269,8 +269,8 @@ pub struct BlurSnapshot {
 /// these are what they are heading for.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChannelSnapshot {
-    pub scroll_x: f32,
-    pub scroll_y: f32,
+    pub x: Stop,
+    pub y: Stop,
     pub blur: bool,
     pub zoom_out: bool,
 }
@@ -315,8 +315,8 @@ impl OutputSnapshot {
             },
             zoom: tween(&state.zoom.factor),
             channels: ChannelSnapshot {
-                scroll_x: channels.scroll_x,
-                scroll_y: channels.scroll_y,
+                x: channels.x,
+                y: channels.y,
                 blur: channels.blur,
                 zoom_out: channels.zoom_out,
             },

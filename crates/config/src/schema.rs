@@ -64,6 +64,7 @@ pub struct ScrollSection {
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct AxisSection {
     pub travel: Option<f32>,
+    pub max_shift: Option<f32>,
     pub duration_ms: Option<u32>,
     pub easing: Option<Easing>,
 }
