@@ -180,8 +180,10 @@ fn watch_config(handle: &LoopHandle<'static, Daemon>, path: &Path) -> Option<Wat
     };
 
     let source = Generic::new(fd, Interest::READ, Mode::Level);
-    let registered = handle.insert_source(source, |_, _, daemon| {
-        daemon.on_config_event();
+    // The daemon arms a timer of its own from this, so it needs a handle to insert it on.
+    let debounce = handle.clone();
+    let registered = handle.insert_source(source, move |_, _, daemon| {
+        daemon.on_config_event(&debounce);
         Ok(PostAction::Continue)
     });
     match registered {

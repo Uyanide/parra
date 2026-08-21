@@ -252,10 +252,17 @@ Two more cases a `"fade"` does not cover cleanly:
 ## Reloading
 
 The daemon watches the configuration file, so an edit takes effect without anyone
-sending `reload-config`. An editor that saves by writing a temporary file and renaming it
-over the original is handled too. `[general] namespace` and
-`[general] layer` are the exception: a layer surface is given both when it is created, so
-those two take effect on the next start.
+sending `reload-config`. The file is read once the save has settled, 50 ms after the last
+thing that happened to it, so an editor that writes a temporary file and renames it over
+the original is one reload rather than three. A configuration file or directory that is a
+symlink is followed to wherever it leads, including after the link is re-pointed.
+
+`[general] namespace` and `[general] layer` are the exception: a layer surface is given
+both when it is created, so those two take effect on the next start.
+
+Removing the directory the file lives in is the one edit that goes unnoticed, since the
+watch belongs to the directory that was removed. `parra reload` picks the file up again,
+and so does restarting the daemon.
 
 ## Easing functions
 

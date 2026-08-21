@@ -5,6 +5,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use calloop::timer::{TimeoutAction, Timer};
+use calloop::{LoopHandle, RegistrationToken};
 use config::Config;
 use control::{
     Event, GpuSnapshot, Micros, OutputSnapshot, PROTOCOL_VERSION, Property, Request, Response,
@@ -16,6 +18,10 @@ use store::Store;
 use tracing::{debug, info, trace, warn};
 
 pub use loops::run;
+
+/// How long the configuration file has to stay still before it is read. A save arrives as
+/// a burst: the file is moved away, created empty, then filled in.
+const SETTLED: Duration = Duration::from_millis(50);
 
 /// Everything the daemon needs that was settled before it started.
 pub struct Startup {
@@ -45,6 +51,11 @@ pub struct Daemon {
     /// Watches the configuration file. `None` when its directory could not be watched, in
     /// which case reloading happens only when something asks for it.
     watcher: Option<config::Watcher>,
+    /// When the file was last touched, plus [`SETTLED`]. Every event pushes it back, so
+    /// one save is one reload however many events it takes.
+    reload_at: Option<Instant>,
+    /// The timer waiting on it, so a burst arms one rather than one each.
+    reload_timer: Option<RegistrationToken>,
     /// When the process began, and how long it took to put something on a screen.
     started: Instant,
     startup_us: Option<Micros>,
@@ -77,6 +88,8 @@ impl Daemon {
             subscribers: Subscribers::default(),
             clocks: BTreeMap::new(),
             watcher: None,
+            reload_at: None,
+            reload_timer: None,
             started,
             startup_us: None,
             stale: false,
@@ -153,10 +166,35 @@ impl Daemon {
 
     /// Something happened in the configuration file's directory. Most of those are an
     /// editor's temporary files, so the watcher is asked whether ours was among them.
-    fn on_config_event(&mut self) {
-        if self.watcher.as_mut().is_some_and(config::Watcher::changed) {
-            // Whatever went wrong is already in the log, and nobody asked for this one.
-            let _ = self.reload();
+    fn on_config_event(&mut self, handle: &LoopHandle<'static, Daemon>) {
+        if !self.watcher.as_mut().is_some_and(config::Watcher::changed) {
+            return;
+        }
+        self.reload_at = Some(Instant::now() + SETTLED);
+        if self.reload_timer.is_some() {
+            return;
+        }
+        match handle.insert_source(Timer::from_duration(SETTLED), |_, _, daemon| daemon.settled()) {
+            Ok(token) => self.reload_timer = Some(token),
+            Err(error) => {
+                warn!(%error, "cannot wait for the edit to finish, reading the file now");
+                self.reload_at = None;
+                let _ = self.reload();
+            }
+        }
+    }
+
+    /// Reloads once the file has been quiet for [`SETTLED`], and waits again otherwise.
+    fn settled(&mut self) -> TimeoutAction {
+        match self.reload_at {
+            Some(deadline) if Instant::now() < deadline => TimeoutAction::ToInstant(deadline),
+            _ => {
+                self.reload_at = None;
+                self.reload_timer = None;
+                // Whatever went wrong is already in the log, and nobody asked for this one.
+                let _ = self.reload();
+                TimeoutAction::Drop
+            }
         }
     }
 

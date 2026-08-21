@@ -285,6 +285,39 @@ Two slots cannot hold three images, and a frame draws only layers it can sample 
 frame's blur level. Both bound the discontinuity at half an image; what a user sees when
 either applies is in [config.md](config.md#transition).
 
+## Noticing an edited configuration file
+
+**A save is a burst, not an event.** Writing the file moves the old one away, creates the
+name again empty, and only then fills it in. Every step is an inotify event, and reading
+on the first of them reads a file that is missing or empty. Every key in the file format
+is optional, so both parse cleanly and resolve to the built-in defaults: the daemon would
+adopt them, log that the namespace disagrees, and put the real configuration back a
+millisecond later when the next event arrived.
+
+So an event records a deadline rather than triggering a read. `Daemon::on_config_event`
+pushes it `SETTLED` (50 ms) ahead and arms one calloop timer, and the reload happens when
+the file has been quiet for that long. One save is one reload whatever shape the save
+takes. The queue is still drained on every event, because the watcher is registered level
+triggered and re-resolves its watches from what it reads.
+
+The event mask stays wide for the same reason. `CREATE` is what `symlink` and `link`
+produce, and they produce nothing else, so dropping it would hide a dotfile manager
+re-pointing a link; the burst is what made it dangerous, and the deadline is where that
+is answered.
+
+**A watch is on an inode, not a path.** `inotify_add_watch` resolves symlinks when the
+watch is added, so a linked configuration *directory* needs nothing special. A linked
+*file* does: the writes land in the directory the link leads to, which is not the one the
+name lives in. `config::watch::places` returns both, `Watcher` holds a `(watch, name)`
+pair for each, and every event that is ours re-resolves them, so a link re-pointed at a
+new generation is followed to its new target.
+
+**A watch that dies stays dead.** Removing the watched directory outright, as a generation
+switch or a restore does, makes the kernel drop the watch; nothing arrives afterwards and
+nothing notices. `parra reload` over the socket re-reads the file regardless of the
+watcher, and a restart rebuilds it, so the recovery is a command rather than machinery
+that runs on every daemon forever.
+
 ## Extension seams
 
 Adding a compositor means adding `compositor/src/backends/<name>/`, its arms in
