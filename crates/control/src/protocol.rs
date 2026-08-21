@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// Bumped whenever the wire format changes, including when it only gains a field.
 /// `Ping` reports it, which is the only way to tell a stale daemon from an unreachable one.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Every duration on the wire is in microseconds, so nothing has to be read twice to
 /// find out which unit it is in.
@@ -38,6 +38,17 @@ pub enum Request {
         /// client that has never heard of it still gets the behaviour everyone expects.
         #[serde(default = "yes")]
         save: bool,
+    },
+    /// Puts the recorded wallpapers back, dropping whatever was asked for since. The
+    /// counterpart to `save: false`, which changes the screen and leaves the record alone.
+    RestoreWallpaper {
+        /// `null` addresses every slot, the same rule `set-wallpaper` follows.
+        ///
+        /// `deserialize_with` only to make the field required, for the reason `path` above
+        /// is: a client whose output came out undefined would restore every slot rather
+        /// than being told it sent nonsense.
+        #[serde(deserialize_with = "Option::deserialize")]
+        output: Option<OutputId>,
     },
     /// The external blur signal, for whatever is drawing over the wallpaper.
     SetBlur {
@@ -353,6 +364,8 @@ mod tests {
                 save: true,
             },
             Request::SetWallpaper { output: Some(OutputId::new("DP-1")), path: None, save: true },
+            Request::RestoreWallpaper { output: None },
+            Request::RestoreWallpaper { output: Some(OutputId::new("DP-1")) },
             Request::SetBlur { output: Some(OutputId::new("eDP-1")), on: true },
             Request::ReloadConfig,
             Request::Subscribe,
@@ -402,6 +415,19 @@ mod tests {
         assert!(
             serde_json::from_str::<Request>(r#"{"set-wallpaper":{"output":"DP-1"}}"#).is_err(),
             "a dropped field must not read as a wallpaper being cleared"
+        );
+    }
+
+    #[test]
+    fn a_restore_says_which_slots_it_means() {
+        let line = r#"{"restore-wallpaper":{"output":null}}"#;
+        assert_eq!(
+            serde_json::from_str::<Request>(line).unwrap(),
+            Request::RestoreWallpaper { output: None }
+        );
+        assert!(
+            serde_json::from_str::<Request>(r#"{"restore-wallpaper":{}}"#).is_err(),
+            "a dropped field must not read as a request to restore every slot"
         );
     }
 

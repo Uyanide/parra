@@ -47,6 +47,7 @@ was replaced. Restarting the daemon is the whole fix.
 | `"get-state"`                                           | Every output.                                                                                                   |
 | `{"get-output":{"output":"DP-1"}}`                      | One output.                                                                                                     |
 | `{"set-wallpaper":{"output":null,"path":"/srv/a.png"}}` | Show an image and remember it. A `null` path empties the slot instead; `"save":false` does not remember either. |
+| `{"restore-wallpaper":{"output":null}}`                 | Put the recorded wallpapers back. `null` addresses every slot.                                                  |
 | `{"set-blur":{"output":"DP-1","on":true}}`              | External blur signal. `null` broadcasts, and a broadcast also clears any per-output requests.                   |
 | `"reload-config"`                                       | Re-read the config file.                                                                                        |
 | `"subscribe"`                                           | Turn this connection into a stream of [events](#events).                                                        |
@@ -82,6 +83,21 @@ An image that will not load is reported in the log, that output falls back to
 `[wallpaper] fallback`, and what was recorded is left alone so the next start tries it
 again. A drive that was not mounted yet therefore recovers on its own.
 
+`restore-wallpaper` is the counterpart to `"save":false`: where that changes the screen and
+leaves the record alone, this changes the screen back to what the record says. Every slot
+it addresses is emptied first, so a wallpaper set over the socket since is dropped whether
+or not the record has anything to put in its place. `null` addresses every slot and
+therefore drops the per-output requests too, the same rule `set-wallpaper` follows; naming
+an output restores that output's own slot and leaves the broadcast one alone.
+
+The record keeps each wallpaper's identity, not just its path, so restoring what is already
+on screen is a no-op and reports nothing. A recorded image that will not load is offered
+again rather than skipped, since the record is a choice rather than a file that happened to
+be readable.
+
+The field is required even though it is nullable, so a client whose output came out
+undefined is refused rather than restoring every slot.
+
 `reload-config` re-reads the file and answers with the parse error if there is one, and
 the daemon keeps running on the configuration it already had. The namespace and layer are
 the exception: a change to either is reported in the log and takes effect on the next
@@ -93,7 +109,7 @@ start. The daemon also watches the configuration file on its own; see
 | Response                      | Meaning                      |
 | ----------------------------- | ---------------------------- |
 | `"done"`                      | The request was carried out. |
-| `{"pong":{"version":3}}`      | Protocol version.            |
+| `{"pong":{"version":4}}`      | Protocol version.            |
 | `{"state":{...}}`             | A `StateSnapshot`.           |
 | `{"output":{...}}`            | One `OutputSnapshot`.        |
 | `{"error":{"message":"..."}}` | The request was refused.     |
@@ -102,7 +118,7 @@ start. The daemon also watches the configuration file on its own; see
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "namespace": "...",
   "frames": 442,
   "texture_bytes": 56173364,

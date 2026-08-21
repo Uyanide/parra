@@ -1,6 +1,7 @@
 pub mod blur;
 pub mod daemon;
 pub mod events;
+pub mod restore;
 pub mod set;
 pub mod state;
 

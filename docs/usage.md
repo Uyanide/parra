@@ -245,6 +245,17 @@ and leave the record alone, so the next start goes back to what it says. On `set
 a wallpaper shown without being adopted; on `unset` it is one dropped without being
 forgotten.
 
+`restore` is the way back without waiting for that next start:
+
+```sh
+parra set ~/pictures/passing.png --no-save
+parra restore                  # back to what is recorded, on every output
+parra restore --output eDP-1   # back to eDP-1's own recorded wallpaper
+```
+
+It empties the slots it addresses before re-applying the record, so it undoes a `--no-save`
+set and a `--no-save` unset alike. Restoring what is already showing does nothing at all.
+
 The config file only says what to show when nothing has been chosen yet:
 
 ```toml
@@ -283,7 +294,7 @@ Copies no longer pointed at are deleted when the daemon starts and after every `
 ## Checking it works
 
 ```sh
-parra ping     # protocol 1
+parra ping     # protocol {version}
 parra state    # every output, what it shows, where its animations are
 ```
 

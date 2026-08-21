@@ -95,27 +95,38 @@ impl Daemon {
             stale: false,
             failure: None,
         };
-        daemon.restore();
+        daemon.restore(None);
         daemon
     }
 
-    /// Puts what the last run was showing back into the signals, before any output exists
-    /// to ask for one.
-    fn restore(&mut self) {
-        let restored: Vec<(Option<OutputId>, WallpaperRef)> = self
+    /// Puts what is written down back into the signals, dropping whatever was asked for
+    /// since. `None` addresses every slot, the same rule `Signals::set_wallpaper` follows.
+    ///
+    /// The record is read from the store's own copy rather than from the file. The two
+    /// are the same thing, since a set that was not to be remembered never reached
+    /// either; why that is the answer is in `docs/architecture.md`.
+    fn restore(&mut self, output: Option<&OutputId>) {
+        let recorded: Vec<(Option<OutputId>, WallpaperRef)> = self
             .store
             .entries()
-            .map(|(output, entry)| (output.cloned(), entry.wallpaper()))
+            .filter(|(slot, _)| output.is_none() || *slot == output)
+            .map(|(slot, entry)| (slot.cloned(), entry.wallpaper()))
             .collect();
 
-        for (output, wallpaper) in restored {
+        // Emptied first, so a slot the record no longer names is dropped rather than left
+        // holding what a transient set put there. Startup finds it already empty.
+        self.signals.set_wallpaper(output.cloned(), None);
+
+        // The broadcast entry comes first, which is what makes this safe: applying it
+        // clears the per-output slots, so the overrides have to follow it.
+        for (slot, wallpaper) in recorded {
             info!(
-                output = ?output,
+                output = ?slot,
                 path = %wallpaper.path().display(),
-                "restoring the wallpaper this was last set to"
+                "restoring a recorded wallpaper"
             );
             self.announce(&wallpaper);
-            self.signals.set_wallpaper(output, Some(wallpaper));
+            self.signals.set_wallpaper(slot, Some(wallpaper));
         }
     }
 
@@ -405,6 +416,20 @@ impl Daemon {
             },
             Request::SetWallpaper { output, path, save } => {
                 self.on_set_wallpaper(output, path, save)
+            }
+            Request::RestoreWallpaper { output } => {
+                if let Some(id) = &output
+                    && !self.states.contains_key(id)
+                {
+                    return unknown_output(id);
+                }
+                info!(output = ?output, "restoring the recorded wallpapers");
+                self.restore(output.as_ref());
+                // Nothing animated moved, so no resolve is owed. A wallpaper the renderer
+                // still holds a texture for is drawn anyway: `Renderer::draw` compares what
+                // it presented against the slot and marks the surface dirty itself.
+                self.resolve_wallpapers(None);
+                Response::Done
             }
             Request::SetBlur { output, on } => {
                 if let Some(id) = &output

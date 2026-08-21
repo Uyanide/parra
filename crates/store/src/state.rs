@@ -258,6 +258,17 @@ mod tests {
     }
 
     #[test]
+    fn the_broadcast_entry_comes_before_the_per_output_ones() {
+        let state = populated();
+        let slots: Vec<Option<OutputId>> = state.entries().map(|(slot, _)| slot.cloned()).collect();
+        assert_eq!(
+            slots,
+            [None, Some(OutputId::new("DP-1"))],
+            "applying the broadcast entry clears the overrides, so it has to come first"
+        );
+    }
+
+    #[test]
     fn the_highest_epoch_is_what_the_next_one_follows() {
         assert_eq!(populated().max_epoch(), 8);
         assert_eq!(State::default().max_epoch(), 0);

@@ -16,6 +16,7 @@ subcommand, and override the XDG-derived locations described in
 parra daemon [--check] [--backend NAME]
 parra set PATH [--output NAME] [--no-save]
 parra unset [--output NAME] [--no-save]
+parra restore [--output NAME]
 parra blur on|off [--output NAME]
 parra state [--output NAME] [--json]
 parra events [--output NAME] [--json]
@@ -47,6 +48,17 @@ Drops a wallpaper set with `parra set`. With `--output`, drops only that output'
 wallpaper; omitted, drops every wallpaper set this way, per-output ones included.
 `--no-save` drops it now but keeps it recorded, so the next start brings it back. What an
 output shows once a wallpaper is dropped is in [usage.md](usage.md#choosing-a-wallpaper).
+
+### `parra restore [--output NAME]`
+
+Puts the recorded wallpapers back, which is the way out of a `--no-save` set or unset
+without restarting the daemon. It addresses slots the way `set` does: `--output` restores
+only that output's own recorded wallpaper and leaves the one every output is on alone;
+omitted, it restores every slot, per-output ones included.
+
+Restoring what is already showing changes nothing, since a recorded wallpaper keeps the
+identity it was recorded with. An image that would not load is offered again, exactly as
+the next start would offer it.
 
 ### `parra blur on|off [--output NAME]`
 

@@ -61,6 +61,8 @@ enum Command {
     Set(cmd::set::Args),
     /// Stop showing a wallpaper set earlier, falling back to what is underneath.
     Unset(cmd::set::UnsetArgs),
+    /// Put the recorded wallpapers back, undoing a --no-save set or unset.
+    Restore(cmd::restore::Args),
     /// Turn the external blur signal on or off.
     Blur(cmd::blur::Args),
     /// Report what the daemon is currently showing.
@@ -101,6 +103,7 @@ fn run(cli: Cli, started: Instant) -> anyhow::Result<()> {
         Command::Daemon(args) => cmd::daemon::run(args, &paths, NAME, started),
         Command::Set(args) => cmd::set::run(args, &paths.socket),
         Command::Unset(args) => cmd::set::unset(args, &paths.socket),
+        Command::Restore(args) => cmd::restore::run(args, &paths.socket),
         Command::Blur(args) => cmd::blur::run(args, &paths.socket),
         Command::State(args) => cmd::state::run(args, &paths.socket),
         Command::Events(args) => cmd::events::run(args, &paths.socket),
@@ -139,6 +142,7 @@ mod tests {
             ["daemon"].as_slice(),
             &["set", "/srv/a.png"],
             &["unset"],
+            &["restore"],
             &["blur", "on"],
             &["state"],
             &["events"],

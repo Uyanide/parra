@@ -318,6 +318,29 @@ nothing notices. `parra reload` over the socket re-reads the file regardless of 
 watcher, and a restart rebuilds it, so the recovery is a command rather than machinery
 that runs on every daemon forever.
 
+## Putting the record back
+
+`--no-save` shows a wallpaper without writing it down, and `parra restore` is the way back
+from one. It re-applies the store's own copy of the record rather than re-reading
+`state.toml`, because the two are the same thing: every path that changes the record
+mutates that copy and then writes the file, and a set that is not to be remembered goes
+through `Store::transient`, which allocates an epoch and records nothing. A re-read would
+buy recovery from a `save` that already failed loudly, and would cost a parse that can
+fail, a version mismatch that would silently empty the record, and an epoch counter to
+reconcile. Nothing else writes the file.
+
+**The slots are emptied before the record is applied.** A restore has to drop a wallpaper
+the record does not name, which is exactly the `--no-save` unset case, and applying entries
+alone could only overwrite. That makes the order the entries come in load-bearing: applying
+the broadcast entry clears the per-output ones, the way a broadcast always does, so it has
+to be applied first. `State::entries` yields it first, and a test says so.
+
+**A restored wallpaper keeps the identity it was recorded with**, epoch included, so
+restoring what is already on screen compares equal and starts nothing. That also makes it
+the only wallpaper change with no decode behind it, since `set` always allocates a fresh
+epoch. What redraws it is `Renderer::draw` comparing what it last presented against the
+slot, not the animation, which there is none of.
+
 ## Extension seams
 
 Adding a compositor means adding `compositor/src/backends/<name>/`, its arms in
