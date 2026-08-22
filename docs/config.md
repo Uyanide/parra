@@ -109,7 +109,7 @@ per output.
 | ------------- | ------------- | -------------------------------------------------------------------------------------------- |
 | `travel`      | `1.0`         | Fraction of the available travel to use, `0..=1`, measured about the centre. `0` pins it.    |
 | `invert`      | `false`       | Runs the axis the other way. See below.                                                      |
-| `max-shift`   | `0.5`         | Furthest the image may move between two adjacent stops, in screens. `0` lifts it. See below. |
+| `max-shift`   | `0.3`         | Furthest the image may move between two adjacent stops, in screens. `0` lifts it. See below. |
 | `duration-ms` | `300`         | `0` makes the move instant. Capped at 60000.                                                 |
 | `easing`      | `"out-cubic"` | See [easing functions](#easing-functions).                                                   |
 
@@ -161,21 +161,21 @@ column.
 
 ```toml
 [scroll.vertical]
-max-shift = 0.5   # one workspace along never moves the image more than half a screen
+max-shift = 0.3   # one workspace along never moves the image more than a third of a screen
 ```
 
 A jump across several stops at once, which a niri workspace switch can be, moves that many
 times the cap.
 
 More stops loosen the cap. One stop is `1 / (stops - 1)` of the travel, so the more stops
-an axis has the shorter each one already is. On the wallpaper above, at `max-shift = 0.5`:
+an axis has the shorter each one already is. On the wallpaper above, at `max-shift = 0.3`:
 
 | workspaces | one switch, uncapped | with the cap | the image's total movement |
 | ---------- | -------------------- | ------------ | -------------------------- |
-| 2          | 2.23 screens         | 0.50         | 0.50                       |
-| 3          | 1.11                 | 0.50         | 1.00                       |
-| 5          | 0.56                 | 0.50         | 2.00                       |
-| 6          | 0.45                 | 0.45         | 2.23, the whole image      |
+| 2          | 2.23 screens         | 0.30         | 0.30                       |
+| 3          | 1.11                 | 0.30         | 0.60                       |
+| 5          | 0.56                 | 0.30         | 1.20                       |
+| 6          | 0.45                 | 0.30         | 1.50                       |
 
 Three more things it does:
 
@@ -186,7 +186,7 @@ Three more things it does:
 
   ```toml
   [scroll.vertical]
-  max-shift = 0.5
+  max-shift = 0.3
 
   [output."DP-1".scroll.vertical]
   max-shift = 0     # the big monitor may use the whole image

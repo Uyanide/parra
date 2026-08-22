@@ -66,7 +66,7 @@ impl Default for AxisParams {
         Self {
             travel: 1.0,
             invert: false,
-            max_shift: Some(0.5),
+            max_shift: Some(0.3),
             tween: Tween::new(0.3, Easing::OutCubic),
         }
     }

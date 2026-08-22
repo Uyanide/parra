@@ -53,7 +53,7 @@ invert = false
 # heights here and screen widths on the horizontal axis. 0 lifts the cap. Only a
 # wallpaper much taller or wider than the screen ever has a stop long enough to
 # reach this.
-max-shift = 0.5
+max-shift = 0.3
 
 # 0 makes the move instant.
 duration-ms = 300
@@ -64,7 +64,7 @@ easing = "out-cubic"
 [scroll.horizontal]
 travel = 1.0
 invert = false
-max-shift = 0.5
+max-shift = 0.3
 duration-ms = 300
 easing = "out-cubic"
 

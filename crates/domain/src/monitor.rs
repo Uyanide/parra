@@ -199,10 +199,10 @@ mod tests {
     fn the_reported_stride_is_what_the_cap_measures() {
         let mut state = monitor();
         state.stride = Stride { v: 1.0, h: 0.0 };
-        assert!((excursion(&mut state) - 0.5).abs() < 1e-4, "one stop held to max-shift");
+        assert!((excursion(&mut state) - 0.3).abs() < 1e-4, "one stop held to max-shift");
 
         state.stride = Stride { v: 0.25, h: 0.0 };
-        assert!((excursion(&mut state) - 2.0).abs() < 1e-4, "four stops of it");
+        assert!((excursion(&mut state) - 1.2).abs() < 1e-4, "four stops of it");
     }
 
     /// `travel` has already narrowed the range the position is driven over, so a stop
@@ -212,7 +212,7 @@ mod tests {
         let mut state = monitor();
         state.stride = Stride { v: 1.0, h: 0.0 };
         state.params.scroll.vertical.travel = 0.5;
-        assert!((excursion(&mut state) - 1.0).abs() < 1e-4);
+        assert!((excursion(&mut state) - 0.6).abs() < 1e-4);
     }
 
     /// What a workspace opening does: every position stays where it was and the rect
