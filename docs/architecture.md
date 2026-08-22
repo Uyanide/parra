@@ -174,11 +174,16 @@ there: `LINEAR` filtering interpolates texels before any shader runs, so straigh
 fringes at every edge whatever the shader does about it; and a copy on disk written by any
 version still reads, so nothing has to be migrated.
 
-Opacity is read off the source image, not the resized copy, because a convolution over a
-constant alpha can land a texel a step short of full. It is only walked for a format that
-carries an alpha channel at all, and the walk stops at the first translucent pixel.
+Opacity is decided twice, once per path a decode can take. The source decode reads it off
+the image before the Lanczos resize, because a convolution over a constant alpha can land
+a texel a step short of full, and it is skipped entirely for a format that carries no alpha
+channel. A cached copy records nothing about the format it was made from, so reading one
+walks the resized buffer every time; that walk lands on the same answer because the resize
+renormalizes its kernels at the borders, which leaves a constant field exactly constant,
+and anything short of constant was already translucent before the resize touched it. Both
+walks stop at the first translucent pixel.
 
-That walk is what keeps the opaque region. Declaring the surface opaque lets the compositor
+Either walk is what keeps the opaque region. Declaring the surface opaque lets the compositor
 skip blending and consider the frame for direct scanout, and an alpha channel saying nothing
 is common enough to be the case worth paying for: every PNG in the collection tested here
 had one, and all of them were fully opaque. A frame gives the region up only while some
@@ -206,17 +211,41 @@ to nothing or straight to fully present. Two values let the crossfade run on its
 while the frame goes on arriving underneath it, and a 20-second arrival interrupted at 8
 seconds measured within half a percent of the unbroken curve.
 
-An emptied slot still snaps. Nothing is drawn for a slot holding no wallpaper, so there is
-no frame left for a fade out to run on; an arrival left in flight there would also never be
-ticked to its end, which is why setting the slot to nothing lands the opacity as well as
-the weight.
-
 The cost is the opaque region, given up for the length of the transition exactly as a
 translucent wallpaper gives it up: the compositor blends the surface and will not scan it
 out directly. The pass itself does not move. The scale is one branch on a uniform and one
 vec4 multiply, and across two alternating rounds of a 20-second arrival, with and without
 it, the per-frame minima agreed to within three microseconds of 662 and were identical at
 734 on the second output.
+
+**A slot with nothing in it is a fully transparent wallpaper.** Unsetting the last
+wallpaper used to leave it on screen: nothing was drawn for a slot holding none, so the
+surface kept the last buffer it was given and the image stayed there for good. The fix is
+not a case for emptiness but the removal of one. An output showing nothing draws a single
+transparent texel, sampled wherever the geometry lands, and everything that already knew
+how to fade a wallpaper works on it unchanged. It is also the answer to what `parra unset`
+should look like, since setting a fully transparent image and unsetting one are the same
+thing to whoever is looking at the screen.
+
+The frame's opacity carries a departure as well as an arrival, with the image leaving held
+in the second slot and the crossfade weight pinned to it. Crossfading into the blank layer
+instead would have been shorter to write and breaks two of the four interruptions: an
+`unset` part-way through an arrival leaves both values moving and multiplies into a bump,
+and a `set` part-way through a departure meets the half-way rule with the blank layer as
+the more visible half, dipping to the backdrop before it climbs. The rule that avoids both
+is the one an arrival already follows -- the opacity is how present the frame is, and the
+weight is which of two images it shows.
+
+That second slot is released on the tick that lands the departure and not before, so the
+image and its bake are held for exactly as long as they are drawn. The frame after it is
+the blank layer, which is byte for byte the same image at zero opacity, so the rule that
+gets a settled value onto the screen needs no case for this one.
+
+One blur factor covers the whole frame and the blank layer is transparent at every level,
+so what decides the factor is whichever wallpaper the frame is built around rather than the
+current layer alone; without that, unsetting a blurred output pops the departing image to
+sharp on its first frame. The cost is the opaque region, given up for good rather than for
+the length of a transition, which is what a transparent wallpaper costs for the same reason.
 
 **Geometry has one source.** The compositor reports which outputs exist; their size and
 scale come from Wayland. Buffers are allocated at `ceil(logical * scale)` device pixels,

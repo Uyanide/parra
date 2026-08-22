@@ -26,9 +26,9 @@ pub struct Frame<'a> {
     /// 0 shows the outgoing wallpaper, 1 the current one.
     pub mix: f32,
     pub tint: Rgba,
-    /// How much of the finished frame to commit. Below 1 only while a wallpaper is
-    /// arriving on an output that had none, which is what makes it fade up out of
-    /// whatever the compositor draws below.
+    /// How much of the finished frame to commit. Below 1 while a wallpaper is arriving on
+    /// an output that had none, and while one is leaving an output that keeps none, which
+    /// is what fades it up out of and back down into whatever the compositor draws below.
     pub opacity: f32,
 }
 

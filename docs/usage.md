@@ -226,7 +226,7 @@ It uncovers the next wallpaper down, walking the order the daemon resolves in:
 1. an output's own wallpaper
 2. the one set for every output
 3. `[wallpaper] fallback`
-4. nothing.
+4. nothing, fully transparent
 
 `--no-save` works on both: change what is on screen now and leave the record alone, so the
 next start goes back to what it says. On `set` that is a wallpaper shown without being

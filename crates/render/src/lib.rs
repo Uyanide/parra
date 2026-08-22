@@ -40,8 +40,13 @@ pub struct Renderer {
     textures: TextureCache,
     blurs: BlurCache,
     loader: Loader,
-    /// What each output actually has on screen. An arriving wallpaper starts no
-    /// animation, so this is what tells an idle output that it owes a frame.
+    /// The layer a slot with nothing in it draws: one fully transparent texel, sampled
+    /// wherever the geometry lands. A frame is what takes the last wallpaper off the
+    /// screen, so an emptied output has to have something to draw.
+    blank: Texture,
+    /// What each output actually has on screen, with no entry for one showing nothing. A
+    /// wallpaper finishing its decode starts no animation, so this is what tells an idle
+    /// output that it owes a frame.
     presented: BTreeMap<OutputId, WallpaperRef>,
     /// Total frames presented, which the idle budget is checked against.
     frames: u64,
@@ -53,6 +58,7 @@ impl Renderer {
         let gl = Gl::new(wayland.connection())?;
         let composite = Composite::new(&gl.api)?;
         let kawase = Kawase::new(&gl.api)?;
+        let blank = Texture::upload(&gl.api, PixelSize::new(1, 1), &[0, 0, 0, 0])?;
         Ok(Self {
             wayland,
             gl,
@@ -62,6 +68,7 @@ impl Renderer {
             textures: TextureCache::default(),
             blurs: BlurCache::default(),
             loader: Loader::new()?,
+            blank,
             presented: BTreeMap::new(),
             frames: 0,
         })
@@ -286,36 +293,50 @@ impl Renderer {
     }
 
     fn draw_output(&mut self, id: &OutputId, state: &MonitorState) -> Result<(), RenderError> {
-        let Some(wallpaper) = state.wallpaper.current() else { return Ok(()) };
         let buffer = state.buffer_size().max_one();
         self.ensure_target(id, buffer)?;
 
-        let Some((sharp, baked)) = layer(&self.textures, &self.blurs, state, wallpaper) else {
-            return Ok(());
+        // A slot with nothing in it draws the blank layer rather than nothing at all: the
+        // frame that takes the last wallpaper off the screen is a frame like any other.
+        // One that has been chosen but is not resident yet keeps the frame it already has
+        // instead, so a set does not blink through transparent while the image decodes.
+        let current = match state.wallpaper.current() {
+            Some(wallpaper) => match layer(&self.textures, &self.blurs, state, wallpaper) {
+                Some(resolved) => Some(resolved),
+                None => return Ok(()),
+            },
+            None => None,
         };
 
-        // One blur factor covers the whole frame, so a layer that cannot be sampled at it
-        // leaves rather than being drawn at another. That degrades to an instant swap.
         let outgoing = state
             .wallpaper
             .outgoing()
             .filter(|_| state.wallpaper.fade() < 1.0)
-            .and_then(|previous| layer(&self.textures, &self.blurs, state, previous))
-            .filter(|(_, previous_baked)| previous_baked.is_some() || baked.is_none());
+            .and_then(|previous| layer(&self.textures, &self.blurs, state, previous));
 
-        // Asked of the slot, not of the layer resolved above: that one is `None` for a
+        // One blur factor covers the whole frame, and the blank layer is transparent at
+        // every level, so it never decides one. What does is the wallpaper the frame is
+        // built around: the current one, or the one leaving a slot that has been emptied.
+        let bakes = current.or(outgoing).is_some_and(|(_, baked)| baked.is_some());
+        // A layer that cannot be sampled at that factor leaves rather than being drawn at
+        // another. That degrades a crossfade to an instant swap.
+        let outgoing = outgoing.filter(|(_, previous_baked)| previous_baked.is_some() || !bakes);
+
+        // Asked of the slot, not of the layers resolved above: those are `None` for a
         // crossfade that degraded, where an image is still on screen to replace.
         let opacity = state.wallpaper.opacity();
 
         // Read from the sharp textures the frame samples. A bake inherits the opacity of
-        // its source, so asking one adds a rounding step to the same answer.
+        // its source, so asking one adds a rounding step to the same answer. A blank layer
+        // covers nothing, whatever the weights say.
         let opaque = opacity >= 1.0
-            && self.textures.is_opaque(wallpaper)
+            && state.wallpaper.current().is_some_and(|current| self.textures.is_opaque(current))
             && state.wallpaper.outgoing().is_none_or(|previous| self.textures.is_opaque(previous));
 
         // With no bake to sample, a zero factor makes the shader skip its second fetch,
         // so the sharp texture standing in for it is never read.
-        let blur = if baked.is_some() { state.blur.amount.value() } else { 0.0 };
+        let blur = if bakes { state.blur.amount.value() } else { 0.0 };
+        let (sharp, baked) = current.unwrap_or((&self.blank, None));
         let uv = state.sample_rect(sharp.size());
         let (previous, uv_previous, mix) = match outgoing {
             Some((previous_sharp, previous_baked)) => (
@@ -366,7 +387,16 @@ impl Renderer {
 
         self.gl.swap(target)?;
         self.frames += 1;
-        self.presented.insert(id.clone(), wallpaper.clone());
+        match state.wallpaper.current() {
+            Some(wallpaper) => {
+                self.presented.insert(id.clone(), wallpaper.clone());
+            }
+            // Forgotten rather than recorded, so that the wallpaper arriving on an emptied
+            // output is noticed even when it is the one that left.
+            None => {
+                self.presented.remove(id);
+            }
+        }
         Ok(())
     }
 

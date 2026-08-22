@@ -94,7 +94,8 @@ easing = "out-cubic"
 
 [transition]
 # "fade" crossfades the outgoing wallpaper into the incoming one, holding both in
-# video memory until it finishes. "none" swaps outright and costs nothing.
+# video memory until it finishes, and fades one out on its own when nothing replaces
+# it. "none" swaps outright and costs nothing.
 mode = "fade"
 duration-ms = 800
 easing = "in-out-cubic"

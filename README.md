@@ -16,7 +16,7 @@ A wlr-layer-shell wallpaper daemon that supports compositor-driven effects:
 and behaves exactly as expected for this type of program:
 
 - **live wallpaper switching** without restarting or reinitializing the daemon
-- **transition effect** while switching, and while the first wallpaper arrives
+- **transition effect** while switching, and while a wallpaper arrives or leaves
 - **transparent wallpapers**, blended over whatever the compositor draws below
 - **automatic wallpaper restoration** at the next start
 - **configuration override** per monitor

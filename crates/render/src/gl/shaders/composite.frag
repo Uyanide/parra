@@ -12,7 +12,7 @@ uniform float u_blur;
 uniform float u_mix;
 // Tint colour, with the configured opacity already folded into the alpha.
 uniform vec4 u_tint;
-// How much of the frame is there at all. Below 1 while a wallpaper is arriving.
+// How much of the frame is there at all. Below 1 while a wallpaper is arriving or leaving.
 uniform float u_opacity;
 
 in vec2 v_uv;

@@ -47,14 +47,17 @@ pub struct Swap {
 ///
 /// With the transition mode off, `fade` snaps and `outgoing` is dropped on the same
 /// call, so the second slot costs nothing.
+///
+/// A slot holding nothing is a fully transparent wallpaper rather than the absence of one,
+/// which is what lets an emptied one be drawn instead of left on screen.
 #[derive(Clone, Debug, Default)]
 pub struct WallpaperSlot {
     outgoing: Option<WallpaperRef>,
     current: Option<WallpaperRef>,
     /// 0 shows `outgoing`, 1 shows `current`.
     fade: Animated,
-    /// How much of the frame is there at all. Below 1 only while a wallpaper is arriving
-    /// with nothing behind it to cross into.
+    /// How much of the frame is there at all. Below 1 while a wallpaper is arriving with
+    /// nothing behind it to cross into, and while one is leaving with nothing to replace it.
     opacity: Animated,
 }
 
@@ -88,8 +91,8 @@ impl WallpaperSlot {
     /// Starts showing `next`. Returns the swap it made, and `None` when nothing changed,
     /// since asking for the wallpaper already in the slot is not a transition.
     ///
-    /// The tween reported is the one actually used, whether it carried a crossfade or an
-    /// arrival, and only this knows which of the two happened.
+    /// The tween reported is the one actually used, whether it carried a crossfade, an
+    /// arrival or a departure, and only this knows which of the three happened.
     pub fn set(
         &mut self,
         next: Option<WallpaperRef>,
@@ -98,20 +101,30 @@ impl WallpaperSlot {
         if self.current == next {
             return None;
         }
-        // A slot with nothing in it has no second image to weigh against, so what arrives
-        // fades the whole frame up instead of crossfading.
-        let arriving = self.current.is_none() && next.is_some();
-        // Nothing is drawn for a slot holding no wallpaper, so an emptied one has no frame
-        // left to animate on.
-        let tween = if next.is_none() || (arriving && !transition.at_start) {
+        // Neither an arrival nor a departure has a second image to weigh against, so both
+        // move the frame's opacity and leave the crossfade alone. An arrival is measured
+        // against the whole slot: one interrupting a departure still has an image on
+        // screen to cross into.
+        let arriving = self.current.is_none() && self.outgoing.is_none() && next.is_some();
+        let leaving = next.is_none();
+        let tween = if arriving && !transition.at_start {
             Tween::INSTANT
         } else {
             transition.effective_tween()
         };
-        let crossfade = if arriving { Tween::INSTANT } else { tween };
+        let crossfade = if arriving || leaving { Tween::INSTANT } else { tween };
 
         let previous = self.current.clone();
-        if crossfade.is_instant() {
+        if leaving {
+            // What is on screen stays in the second slot for the opacity to carry off.
+            // Which image that is follows the same half-way rule a restart uses.
+            if self.fade.value() >= 0.5 {
+                self.outgoing = self.current.take();
+            }
+            self.current = None;
+            // 0 shows the second slot, which is where the image still on screen now is.
+            self.fade.snap(0.0);
+        } else if crossfade.is_instant() {
             self.outgoing = None;
             self.current = next.clone();
             self.fade.snap(1.0);
@@ -127,12 +140,14 @@ impl WallpaperSlot {
         }
 
         if arriving {
+            // Nothing is on screen for the frame to rise out of, so it starts from nothing.
             self.opacity.snap(0.0);
-            self.opacity.retarget(1.0, tween);
-        } else if next.is_none() {
-            // A slot with no wallpaper draws no frame, so an arrival left in flight here
-            // would never be ticked to its end and the output would never settle.
-            self.opacity.snap(1.0);
+        }
+        // Left alone when it is already heading where it belongs, so an arrival keeps its
+        // own clock through a `set` that interrupts it and its curve stays unbroken.
+        let present = if leaving { 0.0 } else { 1.0 };
+        if self.opacity.target() != present {
+            self.opacity.retarget(present, tween);
         }
 
         // What the viewer watches leave: the slot kept to fade out, or whatever was on
@@ -145,10 +160,20 @@ impl WallpaperSlot {
         // together would pin the outgoing image and its bake for the rest of an arrival
         // that a `set` interrupted, long after the crossfade needing them finished.
         let crossfade = self.fade.tick(dt);
-        if !crossfade.is_running() {
+        // Ahead of the test below, so the tick that lands a departure is the one that
+        // releases the image it carried off.
+        let frame = self.opacity.tick(dt);
+        // The exception is an image that is the whole of what is on screen: a departure
+        // holds it in the second slot until the frame it is fading with has gone.
+        if !crossfade.is_running() && !self.is_departing() {
             self.outgoing = None;
         }
-        crossfade | self.opacity.tick(dt)
+        crossfade | frame
+    }
+
+    /// Whether the slot has been emptied and what it held is still fading out.
+    fn is_departing(&self) -> bool {
+        self.current.is_none() && !self.opacity.is_settled()
     }
 
     pub fn is_settled(&self) -> bool {
@@ -248,16 +273,23 @@ mod tests {
         assert!(slot.is_settled());
     }
 
-    /// An arrival that is never drawn again would otherwise leave the output reporting
-    /// motion for ever, since a slot with no wallpaper submits no frame to tick it on.
     #[test]
-    fn emptying_a_slot_part_way_through_an_arrival_leaves_nothing_in_flight() {
+    fn emptying_a_slot_part_way_through_an_arrival_turns_the_frame_around() {
         let mut slot = WallpaperSlot::new();
         slot.set(Some(WallpaperRef::new("/tmp/a.png")), &fade());
         slot.tick(fade().tween.duration * 0.25);
-        slot.set(None, &fade());
+        let arrived = slot.opacity();
 
-        assert!(slot.is_settled());
+        let swap = slot.set(None, &fade()).unwrap();
+
+        assert_eq!(swap.from, Some(WallpaperRef::new("/tmp/a.png")), "it is what leaves");
+        assert_eq!(slot.opacity(), arrived, "the frame turns around rather than jumping");
+        assert_eq!(slot.outgoing(), Some(&WallpaperRef::new("/tmp/a.png")));
+
+        slot.tick(fade().tween.duration);
+        assert!(slot.is_settled(), "an arrival left in flight would never settle");
+        assert_eq!(slot.opacity(), 0.0);
+        assert!(slot.outgoing().is_none());
     }
 
     /// The case that rules out reusing the crossfade weight for both: either branch of the
@@ -290,13 +322,94 @@ mod tests {
     }
 
     #[test]
-    fn emptying_the_slot_reports_what_left_and_no_transition() {
+    fn emptying_the_slot_fades_out_what_was_on_it() {
         let mut slot = showing_a();
         let swap = slot.set(None, &fade()).unwrap();
 
         assert_eq!(swap.from, Some(WallpaperRef::new("/tmp/a.png")));
         assert_eq!(swap.to, None);
+        assert_eq!(swap.tween, fade().tween);
+        assert_eq!(slot.current(), None, "the slot is empty from the moment it is emptied");
+        assert_eq!(slot.outgoing(), Some(&WallpaperRef::new("/tmp/a.png")));
+        assert_eq!(slot.fade(), 0.0, "the second slot is the whole of what is on screen");
+        assert_eq!(slot.opacity(), 1.0, "and it starts from a frame that is fully there");
+        assert!(!slot.is_settled());
+    }
+
+    #[test]
+    fn a_departure_holds_the_image_until_the_frame_carrying_it_has_gone() {
+        let mut slot = showing_a();
+        slot.set(None, &fade());
+
+        assert_eq!(slot.tick(fade().tween.duration * 0.5), Motion::Running);
+        assert!(slot.outgoing().is_some(), "it is still on screen");
+
+        assert_eq!(slot.tick(fade().tween.duration * 0.5), Motion::Settled);
+        // Compared exactly where the opaque region is decided, and anything short of zero
+        // would leave the wallpaper faintly on screen for ever.
+        assert_eq!(slot.opacity(), 0.0);
+        assert!(slot.outgoing().is_none(), "nothing holds its texture afterwards");
+        assert!(slot.is_settled());
+    }
+
+    #[test]
+    fn emptying_a_slot_that_is_already_leaving_reports_nothing() {
+        let mut slot = showing_a();
+        assert!(slot.set(None, &fade()).is_some());
+        assert_eq!(slot.set(None, &fade()), None, "a second unset must not restart the fade");
+
+        slot.tick(fade().tween.duration);
+        assert_eq!(slot.set(None, &fade()), None);
+    }
+
+    #[test]
+    fn emptying_a_slot_mid_crossfade_fades_out_whichever_is_on_screen() {
+        for (elapsed, leaving) in [(0.25, "/tmp/a.png"), (0.75, "/tmp/b.png")] {
+            let mut slot = showing_a();
+            slot.set(Some(WallpaperRef::new("/tmp/b.png")), &fade());
+            slot.tick(fade().tween.duration * elapsed);
+            let swap = slot.set(None, &fade()).unwrap();
+
+            assert_eq!(swap.from, Some(WallpaperRef::new(leaving)), "at {elapsed} of the fade");
+            assert_eq!(slot.outgoing(), Some(&WallpaperRef::new(leaving)));
+            assert_eq!(slot.fade(), 0.0);
+        }
+    }
+
+    #[test]
+    fn a_set_part_way_through_a_departure_crossfades_out_of_what_is_leaving() {
+        let mut slot = showing_a();
+        slot.set(None, &fade());
+        slot.tick(fade().tween.duration * 0.5);
+        let left = slot.opacity();
+
+        let swap = slot.set(Some(WallpaperRef::new("/tmp/b.png")), &fade()).unwrap();
+
+        assert_eq!(swap.from, Some(WallpaperRef::new("/tmp/a.png")));
+        assert_eq!(swap.tween, fade().tween);
+        assert_eq!(slot.opacity(), left, "the frame goes on from where it had got to");
+        assert_eq!(slot.outgoing(), Some(&WallpaperRef::new("/tmp/a.png")));
+        assert_eq!(slot.fade(), 0.0, "the crossfade starts from the image that was leaving");
+
+        slot.tick(fade().tween.duration);
+        assert_eq!(slot.opacity(), 1.0, "and the frame comes back");
+    }
+
+    #[test]
+    fn a_mode_that_swaps_outright_empties_outright() {
+        let params = TransitionParams { mode: TransitionMode::None, ..TransitionParams::default() };
+        let mut slot = showing_a();
+        let swap = slot.set(None, &params).unwrap();
+
         assert!(swap.tween.is_instant());
+        assert_eq!(swap.from, Some(WallpaperRef::new("/tmp/a.png")));
+        assert_eq!(slot.opacity(), 0.0, "the frame is transparent before it is ever drawn");
+        assert!(slot.is_settled());
+
+        // Released on the next tick rather than here, the same as any other image the
+        // second slot stops carrying.
+        slot.tick(0.016);
+        assert!(slot.outgoing().is_none());
     }
 
     #[test]

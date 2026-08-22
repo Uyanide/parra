@@ -256,13 +256,15 @@ output goes from showing nothing to showing something. It uses the same `duratio
 while it runs is whatever the compositor draws below the layer surface; see
 [usage.md](usage.md#transparent-wallpapers).
 
-Three cases snap whatever the mode says:
+An output going the other way, from showing something to showing nothing, fades out over
+the same `duration-ms` and `easing` and is left transparent.
 
-- An output losing its wallpaper. Nothing is drawn for an output with none, so there is no
-  frame left to fade out on.
+Two cases snap whatever the mode says:
+
 - A `parra set` part-way through a fade. Two wallpapers are held at once, so the new one
-  displaces whichever of the two on screen is the less visible. An arrival underneath is
-  not disturbed: it goes on from where it had got to.
+  displaces whichever of the two on screen is the less visible. What the frame as a whole
+  is doing is not disturbed: an arrival goes on from where it had got to, and a wallpaper
+  on its way out turns back from there.
 - An outgoing wallpaper with no baked blur at the level the frame needs. It leaves the
   frame and the swap becomes instant.
 

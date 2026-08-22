@@ -57,8 +57,10 @@ Setting the same path twice takes effect again, so an image edited in place is p
 
 A `null` path empties the addressed slot, and that output is resolved again from the top:
 clearing one monitor's own wallpaper reveals the one every other monitor is on, and
-clearing that reveals `[wallpaper] fallback`. A `null` output empties every slot at once,
-per-output ones included. The `unset` command sends this.
+clearing that reveals `[wallpaper] fallback`. With nothing under it either, the output ends
+up showing nothing: what was on screen fades out over the configured transition and the
+surface is left transparent. A `null` output empties every slot at once, per-output ones
+included. The `unset` command sends this.
 
 A wallpaper set this way is remembered across restarts; `[wallpaper] fallback` applies
 when nothing has been set. See [usage.md](usage.md#choosing-a-wallpaper).
@@ -210,6 +212,9 @@ once the layer surface is configured, which is later than the compositor knowing
 monitor exists. Its wallpaper is the one thing that does not snap, so a `wallpaper-changed`
 with `from` of `null` follows it describing the arrival.
 
+A `to` of `null` is the same event the other way round: the slot is empty from that moment,
+and the duration is how long what was on it takes to leave the screen.
+
 `wallpaper-failed` is the one thing a client cannot learn any other way, since
 `set-wallpaper` is answered before the decode. It is followed by the `wallpaper-changed` of
 each output falling back.
@@ -222,8 +227,7 @@ against its own clock. Four rules make that work:
 - A later event for the same output and property replaces the earlier one, and its `from`
   is the value mid-flight, so a redirected animation is fully described.
 - `duration_us` of `0` means jump. That covers a zero-duration tween,
-  `transition.mode = "none"`, `transition.at-start = false`, and a wallpaper slot that is
-  being emptied.
+  `transition.mode = "none"` and `transition.at-start = false`.
 - Nothing is reported when nothing changed, including re-resolving to the value an output
   already rests at.
 - The start event says when it ends, and no settled event follows.
