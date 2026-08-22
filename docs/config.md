@@ -110,12 +110,14 @@ moves, including `0` to pin it.
 
 ### `[scroll.vertical]` and `[scroll.horizontal]`
 
-The two parallax axes take the same four keys and are configured apart. What moves each
-one is `[compositor]` above; these say how far and how fast it moves. Both are per output.
+The two parallax axes take the same five keys and are configured apart. What moves each
+one is `[compositor]` above; these say how far, which way and how fast it moves. Both are
+per output.
 
 | Key           | Default       | Meaning                                                                                      |
 | ------------- | ------------- | -------------------------------------------------------------------------------------------- |
 | `travel`      | `1.0`         | Fraction of the available travel to use, `0..=1`, measured about the centre.                 |
+| `invert`      | `false`       | Runs the axis the other way. See below.                                                      |
 | `max-shift`   | `0.5`         | Furthest the image may move between two adjacent stops, in screens. `0` lifts it. See below. |
 | `duration-ms` | `300`         | `0` makes the move instant. Capped at 60000.                                                 |
 | `easing`      | `"out-cubic"` | See [easing functions](#easing-functions).                                                   |
@@ -131,6 +133,32 @@ duration-ms = 250   # travel and easing stay at their defaults
 There is no `enabled` key. `travel = 0` pins an axis to its centre, and so does
 `[compositor]` naming nothing for it, so a third way to say it would only be a way to
 disagree with itself.
+
+#### Running an axis the other way
+
+`invert` mirrors the axis, so the first workspace or column shows the bottom or right of
+the wallpaper and the last one shows the top or left.
+
+```toml
+[scroll.vertical]
+invert = true   # workspace 1 starts at the bottom of the image
+```
+
+- An axis at its centre stays where it is when the key is toggled, so an output the
+  compositor has reported no position for does not move.
+- `travel` still applies: `travel = 0.5` covers the same half of the travel, backwards,
+  and `travel = 0` is still pinned.
+- `max-shift` is unaffected. It measures the length of a stop, not its direction.
+- It is inherited apart from `travel`, so one monitor can change how far an axis moves
+  without restating which way:
+
+  ```toml
+  [scroll.vertical]
+  invert = true
+
+  [output."DP-1".scroll.vertical]
+  travel = 0.5   # still inverted
+  ```
 
 #### A maximum shift
 

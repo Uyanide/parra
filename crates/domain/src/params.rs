@@ -39,6 +39,13 @@ pub struct ScrollParams {
 pub struct AxisParams {
     /// Fraction of the available travel to use, about the centre. 0 pins it there.
     pub travel: f32,
+    /// Whether the axis runs the other way, so the first stop sits where the last one
+    /// otherwise would.
+    ///
+    /// Its own field rather than a sign on `travel`, so that an output overriding how far
+    /// an axis moves does not have to restate which way it moves, and so that the shift
+    /// cap goes on reading a positive stop length.
+    pub invert: bool,
     /// Greatest distance the image may move between two adjacent stops, in screen extents
     /// of this axis. `None` lifts the cap.
     ///
@@ -56,7 +63,12 @@ pub const MAX_SHIFT: f32 = 16.0;
 
 impl Default for AxisParams {
     fn default() -> Self {
-        Self { travel: 1.0, max_shift: Some(0.5), tween: Tween::new(0.3, Easing::OutCubic) }
+        Self {
+            travel: 1.0,
+            invert: false,
+            max_shift: Some(0.5),
+            tween: Tween::new(0.3, Easing::OutCubic),
+        }
     }
 }
 

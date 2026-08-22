@@ -45,6 +45,10 @@ horizontal = "none"
 # it, 0 pins the image to the centre, which is how an axis is turned off from here.
 travel = 1.0
 
+# Runs the axis the other way, so the first workspace or column sits where the last
+# one otherwise would. Measured about the centre, so a centred axis does not move.
+invert = false
+
 # Furthest the image may move between two adjacent workspaces or columns, in screen
 # heights here and screen widths on the horizontal axis. 0 lifts the cap. Only a
 # wallpaper much taller or wider than the screen ever has a stop long enough to
@@ -59,6 +63,7 @@ easing = "out-cubic"
 
 [scroll.horizontal]
 travel = 1.0
+invert = false
 max-shift = 0.5
 duration-ms = 300
 easing = "out-cubic"

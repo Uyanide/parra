@@ -248,6 +248,16 @@ Which niri position moves which axis is `[compositor]` in its own config file. C
 axis is `horizontal = "none"` there, rather than a second switch in the shared parameters,
 because otherwise two keys would say one thing.
 
+Which *way* an axis runs is on the other side of that line, in `scroll.<axis>.invert`. A
+backend reports where a position sits and says nothing about which end of the image that
+should be; reading it backwards is a statement about the wallpaper, which every backend
+would otherwise have to answer identically. So it is applied in `policy::axis`, beside
+`travel`, and negates the same excursion about the centre that `travel` scales. Two
+properties come from sharing that arithmetic: the centre is a fixed point, so an undriven
+output does not jump when the key is toggled, and `travel` keeps its sign, so the stop
+length `max-shift` measures in `MonitorState::limits` stays positive and the cap needs no
+knowledge of direction at all.
+
 The axes are configured apart because the compositor animates them apart, and one shared
 curve could only ever match one of the two. Which niri animation each pairs with is in
 [usage.md](usage.md#match-animations).

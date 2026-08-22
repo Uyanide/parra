@@ -206,6 +206,7 @@ fn apply_scroll(params: &mut ScrollParams, section: &ScrollSection, prefix: &str
 
 fn apply_axis(params: &mut AxisParams, section: &AxisSection, path: &str) -> Result<()> {
     set_ratio(&mut params.travel, section.travel, &format!("{path}.travel"))?;
+    overwrite(&mut params.invert, section.invert);
     set_cap(&mut params.max_shift, section.max_shift, &format!("{path}.max-shift"))?;
     apply_tween(&mut params.tween, section.duration_ms, section.easing, path)
 }
@@ -676,6 +677,26 @@ mod tests {
         assert_eq!(config.for_output(&dp1()).scroll.vertical.max_shift, None);
         assert_eq!(config.for_output(&dp1()).scroll.vertical.travel, 1.0, "still moves");
         assert_eq!(config.global.scroll.vertical.max_shift, Some(0.25));
+    }
+
+    /// The property the key shape was chosen for: direction and distance are inherited
+    /// apart, so an output restating one need not restate the other.
+    #[test]
+    fn an_output_may_change_how_far_an_axis_moves_without_changing_which_way() {
+        let config = parse(
+            r#"
+            [scroll.vertical]
+            invert = true
+            [output."DP-1".scroll.vertical]
+            travel = 0.5
+            "#,
+        )
+        .unwrap();
+
+        let axis = config.for_output(&dp1()).scroll.vertical;
+        assert_eq!(axis.travel, 0.5, "the override should win");
+        assert!(axis.invert, "the inversion should be inherited");
+        assert!(!config.global.scroll.horizontal.invert, "the other axis is untouched");
     }
 
     #[test]

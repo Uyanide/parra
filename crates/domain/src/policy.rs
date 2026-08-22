@@ -149,15 +149,19 @@ pub fn wallpaper_for<'a>(
 
 /// Scales the excursion about the centre rather than the raw position, so a travel below
 /// 1 shortens the movement symmetrically instead of biasing it toward one edge.
+///
+/// Inverting negates that same excursion, which leaves the centre a fixed point: an
+/// undriven output does not move when the key is toggled.
 fn axis(position: f32, params: &AxisParams) -> f32 {
     let offset = position - ScrollState::CENTRE;
-    (ScrollState::CENTRE + offset * params.travel).clamp(0.0, 1.0)
+    let travel = if params.invert { -params.travel } else { params.travel };
+    (ScrollState::CENTRE + offset * travel).clamp(0.0, 1.0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::params::BlurParams;
+    use crate::params::{BlurParams, ScrollParams};
 
     fn output(name: &str) -> OutputId {
         OutputId::new(name)
@@ -176,6 +180,10 @@ mod tests {
         AxisParams { travel, ..AxisParams::default() }
     }
 
+    fn inverted(travel: f32) -> AxisParams {
+        AxisParams { invert: true, ..self::travel(travel) }
+    }
+
     #[test]
     fn an_undriven_output_sits_at_the_centre() {
         let channels = Channels::default();
@@ -190,6 +198,49 @@ mod tests {
         assert_eq!(axis(0.0, &travel(0.5)), 0.25);
         assert_eq!(axis(1.0, &travel(0.5)), 0.75);
         assert_eq!(axis(0.0, &travel(0.0)), 0.5, "no travel pins the axis to the centre");
+    }
+
+    #[test]
+    fn inverting_swaps_the_two_ends_of_the_axis() {
+        assert_eq!(axis(0.0, &inverted(1.0)), 1.0);
+        assert_eq!(axis(1.0, &inverted(1.0)), 0.0);
+    }
+
+    /// So that toggling the key never makes an output nothing has reported for jump.
+    #[test]
+    fn the_centre_is_where_inverting_changes_nothing() {
+        assert_eq!(axis(0.5, &inverted(1.0)), axis(0.5, &travel(1.0)));
+    }
+
+    #[test]
+    fn inverting_shortens_about_the_centre_the_way_travel_does() {
+        assert_eq!(axis(0.0, &inverted(0.5)), 0.75);
+        assert_eq!(axis(1.0, &inverted(0.5)), 0.25);
+    }
+
+    #[test]
+    fn an_inverted_axis_with_no_travel_is_still_pinned() {
+        assert_eq!(axis(0.0, &inverted(0.0)), 0.5);
+        assert_eq!(axis(1.0, &inverted(0.0)), 0.5);
+    }
+
+    #[test]
+    fn each_axis_is_inverted_on_its_own() {
+        let id = output("DP-1");
+        let edges = Channels {
+            x: Stop { at: 1.0, stride: 0.5 },
+            y: Stop { at: 1.0, stride: 0.5 },
+            ..Channels::default()
+        };
+        let driven = driven(&id, edges);
+        let params = OutputParams {
+            scroll: ScrollParams { vertical: inverted(1.0), horizontal: travel(1.0) },
+            ..OutputParams::default()
+        };
+        let targets = resolve(&id, &driven, &Signals::default(), &params);
+
+        assert_eq!(targets.scroll_v, 0.0, "the inverted axis runs the other way");
+        assert_eq!(targets.scroll_h, 1.0, "the other one is untouched");
     }
 
     #[test]
