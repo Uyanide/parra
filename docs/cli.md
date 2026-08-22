@@ -30,17 +30,15 @@ Runs the wallpaper daemon. `--check` loads and validates the configuration, repo
 resolved namespace, layer, socket, fallback, compositor settings and remembered wallpaper,
 and exits without touching a graphics stack.
 
-`--backend NAME` says which compositor's configuration to use instead of detecting the one
-running. Since there is one config file per compositor, this is what selects the file, and
-it is what lets `--check` validate a file on a machine that is not running that compositor
-at all.
+`--backend NAME` reads that compositor's configuration file instead of detecting the one
+running, so `--check` can validate a file on any machine.
 
 ### `parra set PATH [--output NAME] [--no-save]`
 
-Canonicalizes `PATH` first, so the daemon does not depend on the caller's working
-directory, and fails early if the file is not readable. `--output` limits the choice to
-one output; omitted, it applies to every output. `--no-save` shows the wallpaper now
-without recording it, so the next start goes back to the previously recorded one.
+Canonicalizes `PATH` and fails when the file is not readable, then hands it to the daemon.
+`--output` limits the choice to one output; omitted, it applies to every output.
+`--no-save` shows the wallpaper now without recording it, so the next start goes back to
+the previously recorded one.
 
 ### `parra unset [--output NAME] [--no-save]`
 
@@ -56,27 +54,24 @@ without restarting the daemon. It addresses slots the way `set` does: `--output`
 only that output's own recorded wallpaper and leaves the one every output is on alone;
 omitted, it restores every slot, per-output ones included.
 
-Restoring what is already showing changes nothing, since a recorded wallpaper keeps the
-identity it was recorded with. An image that would not load is offered again, exactly as
-the next start would offer it.
+Restoring what is already showing changes nothing. An image that would not load is offered
+again, exactly as the next start would offer it.
 
 ### `parra blur on|off [--output NAME]`
 
 Turns the external blur signal on or off. Omitted `--output` broadcasts, and a broadcast
-also clears any per-output requests, so it is always authoritative.
+also clears any per-output requests.
 
 ### `parra state [--output NAME] [--json]`
 
 Reports the daemon's current state. `--output` reports one output instead of all of them.
-`--json` prints the daemon's reply verbatim, for anything that is not a human. Without it
-you get a readable summary.
+`--json` prints the daemon's reply verbatim; without it you get a readable summary.
 
 ### `parra events [--output NAME] [--json]`
 
 Follows what the daemon changes, one event per line, until the daemon stops. The outputs
-that already exist arrive first, so the stream stands on its own without a `state` call
-beside it. `--output` reports only what concerns one output, plus the events that name
-none. `--json` prints each event as the daemon sent it.
+that already exist arrive first. `--output` reports only what concerns one output, plus
+the events that name none. `--json` prints each event as the daemon sent it.
 
 The full list of events and the rules they follow is in
 [control-protocol.md](control-protocol.md#events).
@@ -91,8 +86,7 @@ wallpaper-failed /srv/broken.png
 config-reloaded
 ```
 
-It exits 1 when the daemon goes away, since that is the only thing that ends a stream, and
-0 when whatever it was piped into stops reading.
+It exits 1 when the daemon goes away, and 0 when whatever it was piped into stops reading.
 
 ### `parra reload`
 
@@ -100,21 +94,18 @@ Asks the daemon to re-read its config file.
 
 ### `parra ping`
 
-Checks that the daemon is responding. It prints `protocol N` and exits 0 when the
-daemon's protocol version matches this binary; when they differ it still prints the
-daemon's version and exits 4.
+Checks that the daemon is responding. It prints `protocol N` and exits 0 when the daemon's
+protocol version matches this binary; when they differ it still prints the daemon's version
+and exits 4.
 
 ## Exit codes
 
-| Code | Meaning                                        |
-| ---- | ---------------------------------------------- |
-| 0    | Success.                                       |
-| 1    | Failed, and for `events` the daemon went away. |
-| 3    | No daemon is listening.                        |
-| 4    | The daemon speaks another protocol.            |
-
-Codes 3 and 4 are separate because each has a remedy a script can act on: start the daemon,
-or restart it. Everything else is 1.
+| Code | Meaning                                        | Remedy                |
+| ---- | ---------------------------------------------- | --------------------- |
+| 0    | Success.                                       |                       |
+| 1    | Failed, and for `events` the daemon went away. |                       |
+| 3    | No daemon is listening.                        | Start the daemon.     |
+| 4    | The daemon speaks another protocol.            | Restart the daemon.   |
 
 ## Examples
 

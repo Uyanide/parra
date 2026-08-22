@@ -1,29 +1,20 @@
 # Control protocol
 
-The daemon listens on `$XDG_RUNTIME_DIR/parra-$WAYLAND_DISPLAY.sock`. The display
-name is part of the filename so two compositors in one login session get one daemon
-each. `--socket PATH` overrides it.
+The daemon listens on `$XDG_RUNTIME_DIR/parra-$WAYLAND_DISPLAY.sock`. The display name is
+part of the filename, so two compositors in one login session get one daemon each.
+`--socket PATH` overrides it.
 
 One JSON value per line, request and response alike. The `parra` subcommands that send
 these are documented in [cli.md](cli.md).
 
-## How the daemon answers
-
-The socket is bound before the first frame, so a client that starts alongside the daemon
-either finds it or finds nothing. A path left behind by a daemon that did not get to clean
-up is taken over; a path something still answers on is refused, because two daemons
-sharing one socket would each get an arbitrary half of the requests.
-
-No request can stall a frame, and a connection that opens and then says nothing holds up
-nobody. A line that is not a request is answered with an error rather than by closing the
-connection.
-
 ## Conventions
 
-Variant names are kebab-case. Field names are snake_case, so `jq` paths need no quoting. A
-request with no fields is a bare string.
-
-A request carrying a field the daemon does not know is refused.
+- Variant names are kebab-case. Field names are snake_case, so `jq` paths need no quoting.
+- A request with no fields is a bare string.
+- A request carrying a field the daemon does not know is refused.
+- A line that is not a request is answered with an error, and the connection stays open.
+- A socket left behind by a daemon that did not clean up is taken over. A socket something
+  still answers on is refused.
 
 ## Protocol version
 
@@ -31,14 +22,8 @@ A request carrying a field the daemon does not know is refused.
 changes, including when it only gains a field, so a client can tell a stale daemon from an
 unreachable one and can tell whether a field it wants exists at all.
 
-Rejecting unknown fields means a skew cannot pass unnoticed: a request from a newer client,
-or a reply to an older one, fails to parse rather than half working. A client that answers
-a refusal by comparing `ping` against the version it was built for can report the skew
-instead. `parra` prints `the daemon speaks protocol N, this build speaks M; restart the
-daemon` and exits 4.
-
-This is the partial upgrade: a new binary talking to a daemon still running from before it
-was replaced. Restarting the daemon is the whole fix.
+A version skew fails to parse. `parra` prints `the daemon speaks protocol N, this build
+speaks M; restart the daemon` and exits 4. Restarting the daemon is the whole fix.
 
 ## Requests
 
@@ -53,56 +38,49 @@ was replaced. Restarting the daemon is the whole fix.
 | `"subscribe"`                                           | Turn this connection into a stream of [events](#events).                                                        |
 | `"ping"`                                                | Liveness, and the protocol version.                                                                             |
 
-`set-wallpaper` takes an absolute path: the daemon's working directory is not the
-caller's. The daemon refuses anything that is not a file while the client is still on the
-line; the `set` command canonicalizes the path first (see [cli.md](cli.md)).
-Decoding happens after the reply, so the request is answered immediately and whatever is
-on screen stays there until the new image is ready. A file that turns out not to be an
-image is reported in the log, not to the client that asked.
+`output` and `path` are required fields even where they accept `null`.
 
-A wallpaper set this way is remembered across restarts, and `[wallpaper] fallback` in the
-config file is only what to show when nothing has been set. How the two relate, and where
-the choice is kept, is in [usage.md](usage.md#choosing-a-wallpaper).
+### `set-wallpaper`
+
+Takes an absolute path; the `set` command canonicalizes one first (see [cli.md](cli.md)).
+The daemon checks that the path is a file while the client is still on the line, and
+decodes after the reply, so the request is answered immediately and whatever is on screen
+stays there until the new image is ready. An image that will not decode is reported in the
+log and on the [event stream](#events), and that output falls back to `[wallpaper]
+fallback` with the record left alone, so a drive that was not mounted yet recovers on its
+own.
 
 `save` defaults to true. `false` shows the image for this session only, leaving the
-recorded one alone, so the next start goes back to it.
+recorded one alone.
 
-Setting the same path twice is not a no-op: every set is a distinct wallpaper, so an
-image edited in place takes effect.
+Setting the same path twice takes effect again, so an image edited in place is picked up.
 
-A `null` path empties the addressed slot. What that output shows is then resolved again
-from the top, so clearing one monitor's own wallpaper reveals the one every other monitor
-is on, and clearing that reveals `[wallpaper] fallback`. `null` for the output empties
-every slot at once, per-output ones included. The `unset` command sends this (see
-[cli.md](cli.md)).
+A `null` path empties the addressed slot, and that output is resolved again from the top:
+clearing one monitor's own wallpaper reveals the one every other monitor is on, and
+clearing that reveals `[wallpaper] fallback`. A `null` output empties every slot at once,
+per-output ones included. The `unset` command sends this.
 
-The field is required even though it is nullable, so a client whose path came out
-undefined is refused rather than clearing a wallpaper.
+A wallpaper set this way is remembered across restarts; `[wallpaper] fallback` applies
+when nothing has been set. See [usage.md](usage.md#choosing-a-wallpaper).
 
-An image that will not load is reported in the log, that output falls back to
-`[wallpaper] fallback`, and what was recorded is left alone so the next start tries it
-again. A drive that was not mounted yet therefore recovers on its own.
+### `restore-wallpaper`
 
-`restore-wallpaper` is the counterpart to `"save":false`: where that changes the screen and
-leaves the record alone, this changes the screen back to what the record says. Every slot
-it addresses is emptied first, so a wallpaper set over the socket since is dropped whether
-or not the record has anything to put in its place. `null` addresses every slot and
-therefore drops the per-output requests too, the same rule `set-wallpaper` follows; naming
-an output restores that output's own slot and leaves the broadcast one alone.
+The counterpart to `"save":false`: it changes the screen back to what the record says.
+Every slot it addresses is emptied first, so a wallpaper set over the socket since is
+dropped whether or not the record has anything to put in its place. `null` addresses every
+slot and drops the per-output requests too; naming an output restores that output's own
+slot and leaves the broadcast one alone.
 
-The record keeps each wallpaper's identity, not just its path, so restoring what is already
-on screen is a no-op and reports nothing. A recorded image that will not load is offered
-again rather than skipped, since the record is a choice rather than a file that happened to
-be readable.
+The record keeps each wallpaper's identity as well as its path, so restoring what is
+already on screen is a no-op and reports nothing. A recorded image that will not load is
+offered again.
 
-The field is required even though it is nullable, so a client whose output came out
-undefined is refused rather than restoring every slot.
+### `reload-config`
 
-`reload-config` re-reads the file and answers with the parse error if there is one, and
-the daemon keeps running on the configuration it already had. The namespace and layer are
-the exception: a change to either is reported in the log and takes effect on the next
-start. The daemon also watches the configuration file on its own; see
-[config.md](config.md#reloading).
+Re-reads the file. A parse error is answered to the client and the daemon keeps running on
+the configuration it already had. `[general]` and `[compositor]` changes are reported in
+the log and take effect on the next start. The daemon also watches the file on its own;
+see [config.md](config.md#reloading).
 
 ## Responses
 
@@ -153,44 +131,36 @@ start. The daemon also watches the configuration file on its own; see
 }
 ```
 
-`channels` is what the compositor is driving this output to, before any configuration is
-applied: two scroll axes, and whether the output should be blurred or zoomed out. The
-animated values elsewhere are where those have got to.
-
-Each axis is an `at` normalized to `0..=1` and the `stride` one of its stops covers in the
-same units -- `1 / (stops - 1)`, or `0` for an axis that pans continuously or has nothing to
-travel between. `stride` is what turns
-[`max-shift`](config.md#a-maximum-shift) from a distance in screens into a fraction, and it
-changes when workspaces or columns open and close.
-
-Animated values report both ends. `current` answers "what is on screen", `target`
-answers "where is it going"; a widget that wants to move with the wallpaper needs the
-first, one that wants to predict needs the second.
-
-`settled` is false exactly while frames are being submitted for that output.
-
-`tint` already has `tint-opacity` folded into its alpha, so it is the colour actually
-used rather than the two numbers that produced it.
+- `channels` is what the compositor is driving this output to, before any configuration is
+  applied: two scroll axes, and whether the output should be blurred or zoomed out. The
+  animated values elsewhere are where those have got to.
+- Each axis is an `at` normalized to `0..=1` and the `stride` one of its stops covers in
+  the same units -- `1 / (stops - 1)`, or `0` for an axis that pans continuously or has
+  nothing to travel between. `stride` turns [`max-shift`](config.md#a-maximum-shift) from a
+  distance in screens into a fraction, and changes when workspaces or columns open and
+  close.
+- Animated values report both ends. `current` is what is on screen, `target` is where it
+  is going.
+- `settled` is false exactly while frames are being submitted for that output.
+- `tint` already has `tint-opacity` folded into its alpha.
 
 ### The measurements
 
-Every duration is in microseconds. One unit throughout, so nothing has to be read twice
-to find out which.
+Every duration is in microseconds.
 
-`frames` counts every frame presented on every output. An idle daemon submits none, so
-two readings a minute apart are the whole of the idle check. `texture_bytes` is the video
-memory held by wallpapers, sharp and baked together. `startup_us` runs from the first
-instruction of the process to the first frame on a screen, and is `null` until there has
-been one.
+- `frames` counts every frame presented on every output. An idle daemon submits none, so
+  two readings a minute apart are the whole of the idle check.
+- `texture_bytes` is the video memory held by wallpapers, sharp and baked together.
+- `startup_us` runs from the first instruction of the process to the first frame on a
+  screen, and is `null` until there has been one.
+- `gpu` is what the GPU spent on that output's last frame, and on its most expensive one so
+  far. Both are `null` where the driver has no usable timer, which is a property of the
+  driver: either all outputs report or none do.
 
-`gpu` is what the GPU spent on that output's last frame, and on its most expensive one so
-far. Both are `null` where the driver has no usable timer, which is a property of the
-driver rather than of the output: either all of them report or none do.
-
-`peak_us` is elapsed time, not occupancy. Nothing is submitted while everything is
-settled, so the GPU drops to its lowest clock and the first frame of the next animation
-is measured at that clock: about 9000 microseconds here against a steady state of 150.
-A peak several times the typical frame is therefore the normal reading.
+`peak_us` is elapsed time. Nothing is submitted while everything is settled, so the GPU
+drops to its lowest clock and the first frame of the next animation is measured there:
+about 9000 microseconds here against a steady state of 150. A peak several times the
+typical frame is the normal reading.
 
 ## Events
 
@@ -205,18 +175,12 @@ does this is documented in [cli.md](cli.md).
    ...one line per event, until the daemon stops...
 ```
 
-The reply comes first and the outputs that already exist follow, so a stream describes the
-whole daemon without a second request and cannot race one. Nothing can happen in between:
-both are done on the thread that owns the state, before it goes back to answering anything.
+The daemon reads nothing more from a subscribed connection. Use a second connection for
+other requests; `state` and `set` cost one round trip each.
 
-Whatever the client writes after subscribing is never read. Every line going the other way
-is an event now, and a reply among them could not be told apart from one. Ask on a second
-connection instead; `state` and `set` cost one round trip each.
-
-A subscriber that stops reading is dropped rather than waited on: the daemon queues a
-bounded number of events for it and closes the connection when that fills. A client that
-sees the stream end reconnects and is described again from scratch, which is why the gap
-is a closed connection rather than a missing line.
+A subscriber that stops reading is dropped: the daemon queues a bounded number of events
+for it and closes the connection when that fills. A client that sees the stream end
+reconnects and is described again from scratch.
 
 ### What is reported
 
@@ -237,39 +201,32 @@ is a closed connection rather than a missing line.
 
 `property` is one of `scroll-vertical`, `scroll-horizontal`, `blur` or `zoom`, in the units
 a snapshot reports them in: `0..=1` for the first three, a multiplier for the zoom.
-`easing` uses the names the config file uses, and durations are in microseconds like every
-other duration here.
+`easing` uses the names the config file uses.
 
-### Animations are reported once, not sampled
+`output-ready` carries where the values start, since a monitor appearing snaps. It fires
+once the layer surface is configured, which is later than the compositor knowing the
+monitor exists.
 
-An animation is described when it starts and never again, so a client can run the same
-curve against its own clock rather than follow this one frame by frame. That is what keeps
-an idle daemon idle: a listener costs no frames, and a bar that blurs alongside the
-wallpaper needs no polling to stay in step.
+`wallpaper-failed` is the one thing a client cannot learn any other way, since
+`set-wallpaper` is answered before the decode. It is followed by the `wallpaper-changed` of
+each output falling back.
 
-Four rules make that work:
+### Animation rules
+
+An animation is described when it starts and never again, so a client runs the same curve
+against its own clock. Four rules make that work:
 
 - A later event for the same output and property replaces the earlier one, and its `from`
-  is the value mid-flight, so a redirected animation never has to be guessed at.
-- `duration_us` of `0` means jump rather than animate. That covers a zero-duration tween,
+  is the value mid-flight, so a redirected animation is fully described.
+- `duration_us` of `0` means jump. That covers a zero-duration tween,
   `transition.mode = "none"`, and a wallpaper slot that was empty or is being emptied.
 - Nothing is reported when nothing changed, including re-resolving to the value an output
   already rests at.
-- There is no settled event. The start already says when it ends.
-
-`output-ready` carries where the values start because a monitor appearing snaps rather than
-animating, so no animation event will ever report them. It says that this daemon now has
-state for that output, which is later than the compositor knowing the monitor exists: the
-layer surface has to be configured first.
-
-`wallpaper-failed` is the one thing a client cannot learn any other way. `set-wallpaper` is
-answered before the decode, so the client that asked was told `done`; the failure arrives
-here, followed by the `wallpaper-changed` of each output falling back.
+- The start event says when it ends, and no settled event follows.
 
 ### What is not reported
 
 - Where an animation has got to, and anything else per frame. `get-state` reads those.
-- What the compositor is driving. Those are its to announce, and it does so earlier and
-  more precisely than this could. `get-state` reports them as `channels`.
+- What the compositor is driving. `get-state` reports it as `channels`.
 - Blur `radius`, `downscale` and `tint`, and every other configured parameter. They change
   only with the config file, so `config-reloaded` is the signal to read `get-state` again.

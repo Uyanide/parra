@@ -1,7 +1,7 @@
 # Environment
 
-Several things the daemon needs are already decided by mechanisms outside it. It reads
-those and adds no control of its own.
+Several things the daemon needs are decided outside it. It reads those and adds no control
+of its own.
 
 | What                           | Decided by                                             | What the daemon does                                                                                    |
 | ------------------------------ | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
@@ -22,17 +22,19 @@ those and adds no control of its own.
 | `XDG_CACHE_HOME`  | `$HOME/.cache`       | `parra/*.qoi`, those wallpapers already resized |
 
 `--config`, `--socket`, `--state` and `--cache-dir` override the four, and work on any
-subcommand. Two daemons on two Wayland displays share the last two unless told otherwise;
-the recovery is regeneration from the original, so the cost of not separating them is a
-slow start rather than a wrong wallpaper.
+subcommand.
+
+Two daemons on two Wayland displays share the state file and the cache unless `--state`
+and `--cache-dir` separate them. A cached copy that does not fit is regenerated from the
+original.
 
 ## Choosing a GPU
 
-The daemon picks no device of its own. It renders the way any ordinary GUI application
-does, leaving device selection, buffer allocation and cross-GPU import to the EGL
-implementation and the compositor, which is why a machine whose monitors hang off two
-different DRM devices works without being told anything about it. Why it is built that way
-is in [architecture.md](architecture.md#choosing-a-gpu-is-not-part-of-this).
+The daemon selects no device. It renders the way any ordinary GUI application does,
+leaving device selection, buffer allocation and cross-GPU import to the EGL implementation
+and the compositor, so a machine whose monitors hang off two different DRM devices needs
+no configuration. See
+[architecture.md](architecture.md#choosing-a-gpu-is-not-part-of-this).
 
 To pin it somewhere specific, set the same variables you would for any other GUI
 application. Some combination of:
@@ -45,7 +47,7 @@ application. Some combination of:
 | `DRI_PRIME=1`                      | Select the non-default DRI device on Mesa. |
 | `MESA_LOADER_DRIVER_OVERRIDE`      | Force a specific Mesa driver.              |
 
-Set them where the daemon is started, not in its configuration.
+Set them where the daemon is started.
 
 In a niri config:
 
