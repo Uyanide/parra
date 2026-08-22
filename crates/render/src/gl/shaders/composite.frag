@@ -12,6 +12,8 @@ uniform float u_blur;
 uniform float u_mix;
 // Tint colour, with the configured opacity already folded into the alpha.
 uniform vec4 u_tint;
+// How much of the frame is there at all. Below 1 while a wallpaper is arriving.
+uniform float u_opacity;
 
 in vec2 v_uv;
 in vec2 v_uv_p;
@@ -38,5 +40,10 @@ void main() {
     // Scaled by the coverage it lands on, so it tints the wallpaper and keeps rgb within
     // alpha, which is the invariant the compositor reads the buffer under.
     colour.rgb = mix(colour.rgb, u_tint.rgb * colour.a, u_tint.a * u_blur);
+    // Premultiplied, so scaling all four channels together is what makes the frame weigh
+    // less without changing its colour or leaving rgb outside its alpha.
+    if (u_opacity < 1.0) {
+        colour *= u_opacity;
+    }
     fragColour = colour;
 }

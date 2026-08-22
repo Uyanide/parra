@@ -152,7 +152,9 @@ Every duration is in microseconds.
   two readings a minute apart are the whole of the idle check.
 - `texture_bytes` is the video memory held by wallpapers, sharp and baked together.
 - `startup_us` runs from the first instruction of the process to the first frame on a
-  screen, and is `null` until there has been one.
+  screen, and is `null` until there has been one. That frame is the first of the arrival
+  rather than the finished wallpaper, so the number marks when the pipeline was ready, not
+  when anything was visible.
 - `gpu` is what the GPU spent on that output's last frame, and on its most expensive one so
   far. Both are `null` where the driver has no usable timer, which is a property of the
   driver: either all outputs report or none do.
@@ -205,7 +207,8 @@ a snapshot reports them in: `0..=1` for the first three, a multiplier for the zo
 
 `output-ready` carries where the values start, since a monitor appearing snaps. It fires
 once the layer surface is configured, which is later than the compositor knowing the
-monitor exists.
+monitor exists. Its wallpaper is the one thing that does not snap, so a `wallpaper-changed`
+with `from` of `null` follows it describing the arrival.
 
 `wallpaper-failed` is the one thing a client cannot learn any other way, since
 `set-wallpaper` is answered before the decode. It is followed by the `wallpaper-changed` of
@@ -219,7 +222,8 @@ against its own clock. Four rules make that work:
 - A later event for the same output and property replaces the earlier one, and its `from`
   is the value mid-flight, so a redirected animation is fully described.
 - `duration_us` of `0` means jump. That covers a zero-duration tween,
-  `transition.mode = "none"`, and a wallpaper slot that was empty or is being emptied.
+  `transition.mode = "none"`, `transition.at-start = false`, and a wallpaper slot that is
+  being emptied.
 - Nothing is reported when nothing changed, including re-resolving to the value an output
   already rests at.
 - The start event says when it ends, and no settled event follows.

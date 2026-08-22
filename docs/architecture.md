@@ -192,6 +192,32 @@ nothing here is separable from noise. The walk itself is the one real cost: a so
 of a 40.8 megapixel PNG with an alpha channel went from 237 to 256 ms, and one of a format
 with no alpha channel did not move.
 
+**A wallpaper arriving fades up, and the frame carries its own opacity for it.** An
+output with nothing on it used to snap: a crossfade weighs two images against each other
+and an arrival has one. Carrying alpha through the render path gave the other answer a
+single image has, which is to fade up out of whatever the compositor draws below. What that
+is depends on the setup rather than on anything here; [usage.md](usage.md#transparent-wallpapers)
+says which.
+
+The frame's opacity is a second animated value beside the crossfade weight, not the same
+one reused. Reusing it looks free until a `parra set` lands part-way through an arrival,
+where the rule that keeps whichever image is the more visible sends the frame either back
+to nothing or straight to fully present. Two values let the crossfade run on its own clock
+while the frame goes on arriving underneath it, and a 20-second arrival interrupted at 8
+seconds measured within half a percent of the unbroken curve.
+
+An emptied slot still snaps. Nothing is drawn for a slot holding no wallpaper, so there is
+no frame left for a fade out to run on; an arrival left in flight there would also never be
+ticked to its end, which is why setting the slot to nothing lands the opacity as well as
+the weight.
+
+The cost is the opaque region, given up for the length of the transition exactly as a
+translucent wallpaper gives it up: the compositor blends the surface and will not scan it
+out directly. The pass itself does not move. The scale is one branch on a uniform and one
+vec4 multiply, and across two alternating rounds of a 20-second arrival, with and without
+it, the per-frame minima agreed to within three microseconds of 662 and were identical at
+734 on the second output.
+
 **Geometry has one source.** The compositor reports which outputs exist; their size and
 scale come from Wayland. Buffers are allocated at `ceil(logical * scale)` device pixels,
 with the fractional scale taken from `wp_fractional_scale_v1` as an exact ratio in

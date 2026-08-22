@@ -259,6 +259,10 @@ While a wallpaper has any translucent pixel, the surface is no longer declared o
 the compositor blends it. An image whose alpha channel is present but says nothing
 everywhere keeps being treated as opaque.
 
+The same thing shows through while a wallpaper is arriving on an output that had none, at
+startup or when a monitor is plugged in. [`[transition] at-start`](config.md#transition)
+controls that, and turning it off is what makes an arrival appear outright.
+
 ## State and cache
 
 Two more locations, **neither** of them meant to be edited by hand. `--state PATH` and

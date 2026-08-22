@@ -26,6 +26,10 @@ pub struct Frame<'a> {
     /// 0 shows the outgoing wallpaper, 1 the current one.
     pub mix: f32,
     pub tint: Rgba,
+    /// How much of the finished frame to commit. Below 1 only while a wallpaper is
+    /// arriving on an output that had none, which is what makes it fade up out of
+    /// whatever the compositor draws below.
+    pub opacity: f32,
 }
 
 /// The one program that draws a wallpaper.
@@ -40,6 +44,7 @@ pub struct Composite {
     blur: Option<glow::UniformLocation>,
     mix: Option<glow::UniformLocation>,
     tint: Option<glow::UniformLocation>,
+    opacity: Option<glow::UniformLocation>,
 }
 
 impl Composite {
@@ -67,6 +72,7 @@ impl Composite {
                 blur: gl.get_uniform_location(program, "u_blur"),
                 mix: gl.get_uniform_location(program, "u_mix"),
                 tint: gl.get_uniform_location(program, "u_tint"),
+                opacity: gl.get_uniform_location(program, "u_opacity"),
                 program,
                 vao,
             })
@@ -92,6 +98,7 @@ impl Composite {
             gl.uniform_1_f32(self.mix.as_ref(), frame.mix);
             let tint = frame.tint;
             gl.uniform_4_f32(self.tint.as_ref(), tint.r, tint.g, tint.b, tint.a);
+            gl.uniform_1_f32(self.opacity.as_ref(), frame.opacity);
 
             gl.draw_arrays(glow::TRIANGLES, 0, 3);
             gl.bind_vertex_array(None);

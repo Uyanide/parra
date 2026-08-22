@@ -303,9 +303,14 @@ impl Renderer {
             .and_then(|previous| layer(&self.textures, &self.blurs, state, previous))
             .filter(|(_, previous_baked)| previous_baked.is_some() || baked.is_none());
 
+        // Asked of the slot, not of the layer resolved above: that one is `None` for a
+        // crossfade that degraded, where an image is still on screen to replace.
+        let opacity = state.wallpaper.opacity();
+
         // Read from the sharp textures the frame samples. A bake inherits the opacity of
         // its source, so asking one adds a rounding step to the same answer.
-        let opaque = self.textures.is_opaque(wallpaper)
+        let opaque = opacity >= 1.0
+            && self.textures.is_opaque(wallpaper)
             && state.wallpaper.outgoing().is_none_or(|previous| self.textures.is_opaque(previous));
 
         // With no bake to sample, a zero factor makes the shader skip its second fetch,
@@ -328,6 +333,7 @@ impl Renderer {
             scroll = state.scroll.v.value(),
             blur,
             mix,
+            opacity,
             settled = state.is_settled(),
             "presenting"
         );
@@ -340,6 +346,7 @@ impl Renderer {
             blur,
             mix,
             tint: state.params.blur.effective_tint(),
+            opacity,
         };
         unsafe {
             self.gl.api.viewport(0, 0, buffer.w as i32, buffer.h as i32);

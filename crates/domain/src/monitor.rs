@@ -42,10 +42,10 @@ pub struct MonitorState {
 }
 
 impl MonitorState {
-    /// `wallpaper` is snapped rather than faded in: coming into existence should not look
-    /// like a transition.
-    pub fn new(id: OutputId, params: OutputParams, wallpaper: Option<WallpaperRef>) -> Self {
-        let mut state = Self {
+    /// Arrives showing nothing. The caller sets the wallpaper, which is what gives the
+    /// arrival the configured transition rather than a second rule for it here.
+    pub fn new(id: OutputId, params: OutputParams) -> Self {
+        Self {
             id,
             logical: LogicalSize::default(),
             scale: Scale::ONE,
@@ -55,9 +55,7 @@ impl MonitorState {
             blur: BlurState::new(),
             zoom: ZoomState::new(params.zoom.factor()),
             params,
-        };
-        state.wallpaper.set(wallpaper, &crate::params::TransitionParams::INSTANT);
-        state
+        }
     }
 
     /// Size of the buffer this output needs, in device pixels.
@@ -144,7 +142,7 @@ mod tests {
     use crate::params::{TransitionMode, TransitionParams};
 
     fn monitor() -> MonitorState {
-        let mut state = MonitorState::new(OutputId::new("DP-1"), OutputParams::default(), None);
+        let mut state = MonitorState::new(OutputId::new("DP-1"), OutputParams::default());
         state.logical = LogicalSize::new(2560, 1440);
         state
     }
@@ -276,15 +274,18 @@ mod tests {
     }
 
     #[test]
-    fn a_monitor_appears_already_showing_its_wallpaper() {
+    fn a_monitor_appears_with_its_wallpaper_arriving() {
         let wallpaper = WallpaperRef::new("/tmp/a.png");
-        let state = MonitorState::new(
-            OutputId::new("DP-1"),
-            OutputParams::default(),
-            Some(wallpaper.clone()),
-        );
+        let mut state = monitor();
+        state.snap(&targets(1.0));
+        state.set_wallpaper(Some(wallpaper.clone()));
+
         assert_eq!(state.wallpaper.current(), Some(&wallpaper));
-        assert!(state.is_settled(), "appearing should not look like a transition");
+        assert_eq!(state.wallpaper.opacity(), 0.0);
+        // Only the wallpaper animates. The four driven values still snap, or a monitor
+        // appearing would scroll and zoom its way to where it already is.
+        assert_eq!(state.blur.amount.value(), 1.0);
+        assert!(state.blur.amount.is_settled());
     }
 
     #[test]
@@ -312,7 +313,7 @@ mod tests {
             },
             ..OutputParams::default()
         };
-        let mut state = MonitorState::new(OutputId::new("DP-1"), params, None);
+        let mut state = MonitorState::new(OutputId::new("DP-1"), params);
         state.set_wallpaper(Some(WallpaperRef::new("/tmp/a.png")));
         state.set_wallpaper(Some(WallpaperRef::new("/tmp/b.png")));
         assert!(state.wallpaper.outgoing().is_none());
@@ -328,7 +329,7 @@ mod tests {
             },
             ..OutputParams::default()
         };
-        let mut state = MonitorState::new(OutputId::new("DP-1"), params, None);
+        let mut state = MonitorState::new(OutputId::new("DP-1"), params);
         state.set_wallpaper(Some(WallpaperRef::new("/tmp/a.png")));
         state.set_wallpaper(Some(WallpaperRef::new("/tmp/b.png")));
 

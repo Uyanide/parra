@@ -132,18 +132,25 @@ impl ZoomParams {
 pub struct TransitionParams {
     pub mode: TransitionMode,
     pub tween: Tween,
+    /// Whether a wallpaper arriving on an empty slot fades up out of whatever is drawn
+    /// below, rather than appearing outright.
+    pub at_start: bool,
 }
 
 impl Default for TransitionParams {
     fn default() -> Self {
-        Self { mode: TransitionMode::Fade, tween: Tween::new(0.8, Easing::InOutCubic) }
+        Self {
+            mode: TransitionMode::Fade,
+            tween: Tween::new(0.8, Easing::InOutCubic),
+            at_start: true,
+        }
     }
 }
 
 impl TransitionParams {
     /// Swaps with no animation, whatever mode is configured.
     pub const INSTANT: TransitionParams =
-        TransitionParams { mode: TransitionMode::None, tween: Tween::INSTANT };
+        TransitionParams { mode: TransitionMode::None, tween: Tween::INSTANT, at_start: false };
 
     /// The tween actually used, which is instant for a mode that swaps outright.
     pub fn effective_tween(&self) -> Tween {

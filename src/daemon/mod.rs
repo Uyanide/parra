@@ -288,7 +288,8 @@ impl Daemon {
     }
 
     /// A monitor appearing snaps to its resolved values rather than animating to them:
-    /// coming into existence should not look like a transition.
+    /// coming into existence should not look like a transition. Its wallpaper is the one
+    /// thing that does animate, since arriving is exactly what it has to show.
     fn add_output(&mut self, id: OutputId, logical: domain::LogicalSize, scale: domain::Scale) {
         info!(output = %id, width = logical.w, height = logical.h, %scale, "output ready");
         let params = self.config.for_output(&id).clone();
@@ -297,16 +298,22 @@ impl Daemon {
             self.announce(wallpaper);
         }
 
-        let mut state = MonitorState::new(id.clone(), params, wallpaper);
+        let mut state = MonitorState::new(id.clone(), params);
         state.logical = logical;
         state.scale = scale;
         // Beside the geometry rather than left to the next resolve: arriving does not set
         // `stale`, so an output whose compositor says nothing more would draw uncapped.
         state.stride = self.driven.output(&id).stride();
         state.snap(&policy::resolve(&id, &self.driven, &self.signals, &state.params));
+        let swap = state.set_wallpaper(wallpaper);
         self.clocks.insert(id.clone(), Instant::now());
         // Snapped, so no animation event will ever carry these values: the arrival does.
         self.subscribers.emit(&Event::output_ready(&state));
+        // After it, and separately, because the wallpaper is the one value that did not
+        // snap. Without this a listener is never told the arrival is under way.
+        if let Some(swap) = swap {
+            self.subscribers.emit(&Event::wallpaper_changed(&id, &swap));
+        }
         self.states.insert(id, state);
     }
 

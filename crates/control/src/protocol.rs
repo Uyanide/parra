@@ -478,7 +478,7 @@ mod tests {
     }
 
     fn monitor() -> MonitorState {
-        MonitorState::new(output(), OutputParams::default(), None)
+        MonitorState::new(output(), OutputParams::default())
     }
 
     #[test]
