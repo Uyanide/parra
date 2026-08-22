@@ -250,6 +250,15 @@ The config file says what to show when nothing has been chosen yet:
 fallback = "~/pictures/wall.png"
 ```
 
+### Transparent wallpapers
+
+An image with an alpha channel is drawn with it. Where the wallpaper is not fully opaque,
+whatever the compositor draws below the layer surface shows through.
+
+While a wallpaper has any translucent pixel, the surface is no longer declared opaque and
+the compositor blends it. An image whose alpha channel is present but says nothing
+everywhere keeps being treated as opaque.
+
 ## State and cache
 
 Two more locations, **neither** of them meant to be edited by hand. `--state PATH` and

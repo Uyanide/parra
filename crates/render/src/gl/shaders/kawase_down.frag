@@ -12,12 +12,15 @@ in vec2 v_uv;
 out vec4 fragColour;
 
 // Dual-Kawase downsample: the centre plus four diagonals, weighted 4:1:1:1:1.
+//
+// Alpha is carried with the colour. The source is premultiplied, so averaging the four
+// components together is the same operation the three used to be.
 void main() {
     vec2 o = u_halfpixel * u_offset;
-    vec3 sum = texture(u_source, v_uv).rgb * 4.0;
-    sum += texture(u_source, v_uv - o).rgb;
-    sum += texture(u_source, v_uv + o).rgb;
-    sum += texture(u_source, v_uv + vec2(o.x, -o.y)).rgb;
-    sum += texture(u_source, v_uv - vec2(o.x, -o.y)).rgb;
-    fragColour = vec4(sum / 8.0, 1.0);
+    vec4 sum = texture(u_source, v_uv) * 4.0;
+    sum += texture(u_source, v_uv - o);
+    sum += texture(u_source, v_uv + o);
+    sum += texture(u_source, v_uv + vec2(o.x, -o.y));
+    sum += texture(u_source, v_uv - vec2(o.x, -o.y));
+    fragColour = sum / 8.0;
 }

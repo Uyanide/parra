@@ -61,6 +61,8 @@ pub enum RenderError {
     },
     #[error("cannot resize {}: {message}", path.display())]
     ImageResize { path: PathBuf, message: String },
+    #[error("cannot premultiply an image: {0}")]
+    Premultiply(String),
     #[error("cannot use the cached copy at {}: {message}", path.display())]
     Cache { path: PathBuf, message: String },
     #[error("cannot start the wallpaper decoder: {operation} failed")]

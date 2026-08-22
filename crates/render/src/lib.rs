@@ -303,6 +303,11 @@ impl Renderer {
             .and_then(|previous| layer(&self.textures, &self.blurs, state, previous))
             .filter(|(_, previous_baked)| previous_baked.is_some() || baked.is_none());
 
+        // Read from the sharp textures the frame samples. A bake inherits the opacity of
+        // its source, so asking one adds a rounding step to the same answer.
+        let opaque = self.textures.is_opaque(wallpaper)
+            && state.wallpaper.outgoing().is_none_or(|previous| self.textures.is_opaque(previous));
+
         // With no bake to sample, a zero factor makes the shader skip its second fetch,
         // so the sharp texture standing in for it is never read.
         let blur = if baked.is_some() { state.blur.amount.value() } else { 0.0 };
@@ -344,7 +349,7 @@ impl Renderer {
         target.measure(&self.gl.api, || self.composite.draw(&self.gl.api, &frame));
 
         // Both must precede the commit that swapping performs.
-        self.wayland.apply_geometry(id);
+        self.wayland.apply_geometry(id, opaque);
         self.wayland.request_frame(id);
 
         let settled = state.is_settled();

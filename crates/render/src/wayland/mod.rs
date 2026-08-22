@@ -132,11 +132,11 @@ impl Wayland {
 
     /// Republishes the surface geometry. Must happen before the commit that presenting
     /// performs, so the buffer and the size it claims to be arrive together.
-    pub fn apply_geometry(&mut self, id: &OutputId) {
+    pub fn apply_geometry(&mut self, id: &OutputId, opaque: bool) {
         let qh = self.qh.clone();
         let compositor = self.state.globals.compositor.clone();
         if let Some(surface) = self.surface_mut(id) {
-            surface.apply_geometry(&compositor, &qh);
+            surface.apply_geometry(&compositor, &qh, opaque);
         }
     }
 

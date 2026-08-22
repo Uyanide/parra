@@ -99,15 +99,16 @@ impl Surface {
         true
     }
 
-    /// Tells the compositor how large the buffer should appear, and that all of it is
-    /// opaque.
+    /// Tells the compositor how large the buffer should appear, and how much of it is
+    /// opaque. Must be called before the commit that presenting performs.
     ///
-    /// The viewport is what maps a device-pixel buffer back to logical coordinates, and
-    /// so what stops a fractional scale from blurring the result. Declaring the surface
-    /// opaque lets the compositor skip blending and consider it for direct scanout.
-    ///
-    /// Must be called before the commit that presenting performs.
-    pub fn apply_geometry(&self, compositor: &WlCompositor, qh: &QueueHandle<State>) {
+    /// - The viewport maps a device-pixel buffer back to logical coordinates, which is
+    ///   what stops a fractional scale from blurring the result.
+    /// - Declaring the surface opaque lets the compositor skip blending and consider it
+    ///   for direct scanout, so `opaque` is answered per frame in [`Renderer::draw`].
+    /// - An empty region is published for a translucent frame. The region is
+    ///   double-buffered state and would otherwise stand from the last commit.
+    pub fn apply_geometry(&self, compositor: &WlCompositor, qh: &QueueHandle<State>, opaque: bool) {
         if self.logical.is_empty() {
             return;
         }
@@ -115,7 +116,9 @@ impl Surface {
         self.viewport.set_destination(width, height);
 
         let region = compositor.create_region(qh, ());
-        region.add(0, 0, width, height);
+        if opaque {
+            region.add(0, 0, width, height);
+        }
         self.wl_surface.set_opaque_region(Some(&region));
         region.destroy();
     }

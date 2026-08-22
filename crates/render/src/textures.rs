@@ -21,6 +21,9 @@ struct Resident {
     /// The size the decode was asked for, which an image smaller than the screen comes
     /// back short of. Comparing against what came back would ask again on every pass.
     asked: PixelSize,
+    /// Whether every pixel of the image is opaque. Kept here because `Texture` is also
+    /// what a blur level is rendered into, and no caller asks one of those.
+    opaque: bool,
 }
 
 impl TextureCache {
@@ -44,7 +47,7 @@ impl TextureCache {
     /// Takes a finished decode onto the GPU, replacing whatever it supersedes.
     pub fn accept(&mut self, gl: &glow::Context, loaded: Loaded) -> Result<(), RenderError> {
         let texture = Texture::upload(gl, loaded.decoded.size, &loaded.decoded.rgba)?;
-        let resident = Resident { texture, asked: loaded.asked };
+        let resident = Resident { texture, asked: loaded.asked, opaque: loaded.decoded.opaque };
         if let Some(replaced) = self.entries.insert(loaded.wallpaper, resident) {
             replaced.texture.destroy(gl);
         }
@@ -53,6 +56,14 @@ impl TextureCache {
 
     pub fn get(&self, wallpaper: &WallpaperRef) -> Option<&Texture> {
         self.entries.get(wallpaper).map(|resident| &resident.texture)
+    }
+
+    /// Whether this wallpaper covers what it is drawn over.
+    ///
+    /// One that is not resident reads as opaque: there is nothing to draw it over yet, and
+    /// an output with no texture commits no buffer at all.
+    pub fn is_opaque(&self, wallpaper: &WallpaperRef) -> bool {
+        self.entries.get(wallpaper).is_none_or(|resident| resident.opaque)
     }
 
     /// Frees everything no output is showing any more.

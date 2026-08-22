@@ -1,8 +1,10 @@
 use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 
 use domain::PixelSize;
 use fast_image_resize::images::{Image, ImageRef};
-use fast_image_resize::{PixelType, ResizeAlg, ResizeOptions, Resizer};
+use fast_image_resize::{MulDiv, PixelType, ResizeAlg, ResizeOptions, Resizer};
 use tracing::debug;
 
 use crate::error::RenderError;
@@ -13,7 +15,12 @@ const FILTER: ResizeAlg = ResizeAlg::Convolution(fast_image_resize::FilterType::
 
 pub struct Decoded {
     pub size: PixelSize,
+    /// Straight alpha, as `image` and `fast_image_resize` both work in. [`premultiply`]
+    /// is what turns it into what the GPU and the compositor want.
     pub rgba: Vec<u8>,
+    /// Whether every pixel is fully opaque, which is what lets an output go on declaring
+    /// its surface opaque.
+    pub opaque: bool,
 }
 
 /// Reads an image and shrinks it to `target` if it is larger.
@@ -30,8 +37,15 @@ pub fn load(path: &Path, target: PixelSize) -> Result<Decoded, RenderError> {
 
     let decoded = reader
         .decode()
-        .map_err(|source| RenderError::ImageDecode { path: path.to_owned(), source })?
-        .into_rgba8();
+        .map_err(|source| RenderError::ImageDecode { path: path.to_owned(), source })?;
+
+    // Asked before the conversion, which gives every image four channels whether or not
+    // the file had them, and so is the last moment the format's own answer is available.
+    let channel = decoded.color().has_alpha();
+    let decoded = decoded.into_rgba8();
+    // Read from the source: a convolution can land a constant alpha a step short of full,
+    // and a copy is what the resize below produces.
+    let opaque = !channel || is_opaque(&decoded);
 
     let source = PixelSize::new(decoded.width(), decoded.height());
     if source.is_empty() {
@@ -43,7 +57,7 @@ pub fn load(path: &Path, target: PixelSize) -> Result<Decoded, RenderError> {
 
     let wanted = fit_within(source, target);
     if wanted == source {
-        return Ok(Decoded { size: source, rgba: decoded.into_raw() });
+        return Ok(Decoded { size: source, rgba: decoded.into_raw(), opaque });
     }
 
     debug!(
@@ -62,7 +76,30 @@ pub fn load(path: &Path, target: PixelSize) -> Result<Decoded, RenderError> {
         .resize(&src, &mut dst, &ResizeOptions::new().resize_alg(FILTER))
         .map_err(|error| resize_error(error.to_string()))?;
 
-    Ok(Decoded { size: wanted, rgba: dst.into_vec() })
+    Ok(Decoded { size: wanted, rgba: dst.into_vec(), opaque })
+}
+
+/// Whether every pixel is fully opaque.
+///
+/// Stops at the first translucent pixel, so the walk runs in full only for an alpha
+/// channel that says nothing. Whether it is worth starting is the caller's to judge.
+pub fn is_opaque(rgba: &[u8]) -> bool {
+    rgba.chunks_exact(4).all(|pixel| pixel[3] == u8::MAX)
+}
+
+/// Multiplies the colour channels by alpha, in place, which is the form GL and Wayland
+/// both read a buffer as.
+///
+/// Must precede the upload: `LINEAR` filtering interpolates texels before any shader sees
+/// them, and straight alpha fringes at every edge once it does. An opaque image needs
+/// none of it, so the caller skips it there.
+pub fn premultiply(decoded: &mut Decoded) -> Result<(), RenderError> {
+    let (w, h) = (decoded.size.w, decoded.size.h);
+    let mut image = Image::from_slice_u8(w, h, &mut decoded.rgba, PixelType::U8x4)
+        .map_err(|error| RenderError::Premultiply(error.to_string()))?;
+    MulDiv::default()
+        .multiply_alpha_inplace(&mut image)
+        .map_err(|error| RenderError::Premultiply(error.to_string()))
 }
 
 /// Largest size an image will ever be sampled at: a cover fit of the buffer, enlarged by
@@ -102,7 +139,93 @@ fn fit_within(source: PixelSize, target: PixelSize) -> PixelSize {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    use image::{ExtendedColorType, ImageEncoder, codecs::png::PngEncoder};
+
     use super::*;
+
+    /// Writes one PNG and answers where it landed. Named per test so two running at once
+    /// cannot read each other's file.
+    fn png(pixels: &[u8], colour: ExtendedColorType) -> PathBuf {
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let file = std::env::temp_dir().join(format!("decode-{}-{unique}.png", std::process::id()));
+        let mut bytes = Vec::new();
+        PngEncoder::new(&mut bytes).write_image(pixels, 2, 2, colour).unwrap();
+        std::fs::write(&file, &bytes).unwrap();
+        file
+    }
+
+    /// Four pixels, every alpha at full.
+    fn opaque_rgba() -> Vec<u8> {
+        vec![10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255]
+    }
+
+    /// Well above anything a test asks to shrink to.
+    const UNLIMITED: PixelSize = PixelSize { w: 4096, h: 4096 };
+
+    #[test]
+    fn a_format_with_no_alpha_channel_is_opaque() {
+        let file =
+            png(&[10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120], ExtendedColorType::Rgb8);
+        assert!(load(&file, UNLIMITED).unwrap().opaque);
+        std::fs::remove_file(&file).unwrap();
+    }
+
+    /// The common case the walk exists for: a channel is present and says nothing, and
+    /// giving up the opaque region over it would cost a blend for no visible difference.
+    #[test]
+    fn an_alpha_channel_that_says_nothing_is_still_opaque() {
+        let file = png(&opaque_rgba(), ExtendedColorType::Rgba8);
+        assert!(load(&file, UNLIMITED).unwrap().opaque);
+        std::fs::remove_file(&file).unwrap();
+    }
+
+    #[test]
+    fn one_pixel_short_of_full_is_enough_to_lose_the_opaque_region() {
+        let mut pixels = opaque_rgba();
+        pixels[7] = 254;
+        let file = png(&pixels, ExtendedColorType::Rgba8);
+        assert!(!load(&file, UNLIMITED).unwrap().opaque);
+        std::fs::remove_file(&file).unwrap();
+    }
+
+    #[test]
+    fn opacity_survives_the_resize_that_follows_it() {
+        let mut pixels = opaque_rgba();
+        pixels[7] = 0;
+        let file = png(&pixels, ExtendedColorType::Rgba8);
+        let decoded = load(&file, PixelSize::new(1, 1)).unwrap();
+        assert_eq!(decoded.size, PixelSize::new(1, 1), "the test needs the resize to happen");
+        assert!(!decoded.opaque, "the answer is the source's, not the copy's");
+        std::fs::remove_file(&file).unwrap();
+    }
+
+    #[test]
+    fn premultiplication_brings_every_channel_within_its_alpha() {
+        let mut decoded = Decoded {
+            size: PixelSize::new(2, 1),
+            rgba: vec![255, 255, 255, 0, 200, 100, 50, 128],
+            opaque: false,
+        };
+        premultiply(&mut decoded).unwrap();
+
+        for pixel in decoded.rgba.chunks_exact(4) {
+            let alpha = pixel[3];
+            assert!(pixel[..3].iter().all(|&channel| channel <= alpha), "{pixel:?}");
+        }
+    }
+
+    /// Why the caller skips it for an opaque image: there is nothing there to multiply.
+    #[test]
+    fn premultiplying_an_opaque_image_changes_nothing() {
+        let original = opaque_rgba();
+        let mut decoded =
+            Decoded { size: PixelSize::new(2, 2), rgba: original.clone(), opaque: true };
+        premultiply(&mut decoded).unwrap();
+        assert_eq!(decoded.rgba, original);
+    }
 
     #[test]
     fn an_image_smaller_than_the_screen_is_left_alone() {

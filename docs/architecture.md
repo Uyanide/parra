@@ -162,6 +162,36 @@ The configured fallback is not kept this way. It is what shows before anything h
 been chosen, and giving it a copy would mean a second thing deciding when a wallpaper's
 identity changes.
 
+**An image's alpha is carried, and its opacity is decided once.** A wallpaper with an
+alpha channel shows what is behind the layer surface. Everything the composite and Kawase
+passes touch is premultiplied, so a crossfade, a blur bake and the tint are all linear in
+coverage as well as in colour, and an opaque frame comes out of the shader byte for byte
+what it did before.
+
+The buffer stays straight alpha through the decode, the Lanczos resize and the QOI copy,
+and is premultiplied once on the decode thread just before the upload. Two reasons put it
+there: `LINEAR` filtering interpolates texels before any shader runs, so straight alpha
+fringes at every edge whatever the shader does about it; and a copy on disk written by any
+version still reads, so nothing has to be migrated.
+
+Opacity is read off the source image, not the resized copy, because a convolution over a
+constant alpha can land a texel a step short of full. It is only walked for a format that
+carries an alpha channel at all, and the walk stops at the first translucent pixel.
+
+That walk is what keeps the opaque region. Declaring the surface opaque lets the compositor
+skip blending and consider the frame for direct scanout, and an alpha channel saying nothing
+is common enough to be the case worth paying for: every PNG in the collection tested here
+had one, and all of them were fully opaque. A frame gives the region up only while some
+wallpaper it samples actually has a translucent pixel.
+
+Measured against the same session, both builds run alternately so clock drift lands on
+both: the crossfade, which fetches four textures and is the most exposed to the wider
+arithmetic, came out at or below the old figures on every run; the blur came out within
+five percent either way. Run-to-run spread on one unchanged build is about ten percent, so
+nothing here is separable from noise. The walk itself is the one real cost: a source decode
+of a 40.8 megapixel PNG with an alpha channel went from 237 to 256 ms, and one of a format
+with no alpha channel did not move.
+
 **Geometry has one source.** The compositor reports which outputs exist; their size and
 scale come from Wayland. Buffers are allocated at `ceil(logical * scale)` device pixels,
 with the fractional scale taken from `wp_fractional_scale_v1` as an exact ratio in

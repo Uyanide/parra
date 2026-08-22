@@ -218,6 +218,9 @@ size times the deepest zoom. At rest one texel is one device pixel, so the confi
 number is the blur's extent on screen, and one radius means the same thing on monitors at
 different scales.
 
+`tint` follows the wallpaper's own coverage, so it reaches a transparent part of an image
+as far as that part is there; see [usage.md](usage.md#transparent-wallpapers).
+
 ### `[zoom]`
 
 | Key           | Default       | Meaning                                                                                                                                                                                              |

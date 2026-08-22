@@ -58,10 +58,16 @@ pub fn read(file: &Path) -> Result<Decoded, RenderError> {
     decoder
         .read_image(&mut rgba)
         .map_err(|source| RenderError::ImageDecode { path: file.to_owned(), source })?;
-    Ok(Decoded { size: PixelSize::new(w, h), rgba })
+    // Always walked: the copy records nothing about the format it was made from. It is
+    // screen-sized, so this is a fraction of the read that just produced it.
+    let opaque = crate::decode::is_opaque(&rgba);
+    Ok(Decoded { size: PixelSize::new(w, h), rgba, opaque })
 }
 
 /// Writes a resized copy, atomically, so a copy that exists is always a whole one.
+///
+/// Written before the buffer is premultiplied, so the file holds straight alpha and a copy
+/// from any earlier version still reads.
 pub fn write(file: &Path, decoded: &Decoded) -> Result<(), RenderError> {
     let cache_error = |message: String| RenderError::Cache { path: file.to_owned(), message };
 
@@ -95,10 +101,21 @@ mod tests {
     }
 
     /// Something with structure, so a decoder that returned the wrong stride would show.
+    /// The 251 stride never lands on 255, so every alpha here is short of opaque.
     fn sample() -> Decoded {
         let size = PixelSize::new(7, 5);
-        let rgba = (0..size.area() * 4).map(|i| (i % 251) as u8).collect();
-        Decoded { size, rgba }
+        let rgba: Vec<u8> = (0..size.area() * 4).map(|i| (i % 251) as u8).collect();
+        Decoded { size, rgba, opaque: false }
+    }
+
+    /// The same shape with every alpha at full.
+    fn opaque_sample() -> Decoded {
+        let mut decoded = sample();
+        for pixel in decoded.rgba.chunks_exact_mut(4) {
+            pixel[3] = u8::MAX;
+        }
+        decoded.opaque = true;
+        decoded
     }
 
     #[test]
@@ -110,7 +127,20 @@ mod tests {
 
         let read_back = read(&file).unwrap();
         assert_eq!(read_back.size, original.size);
-        assert_eq!(read_back.rgba, original.rgba);
+        assert_eq!(read_back.rgba, original.rgba, "alpha included");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The copy carries no flag of its own, so reading one has to arrive at the same
+    /// answer the decode did or an output would declare the wrong opaque region.
+    #[test]
+    fn opacity_is_re_derived_from_the_copy() {
+        let dir = directory();
+        for original in [sample(), opaque_sample()] {
+            let file = dir.join(format!("global-{}.qoi", u32::from(original.opaque)));
+            write(&file, &original).unwrap();
+            assert_eq!(read(&file).unwrap().opaque, original.opaque);
+        }
         fs::remove_dir_all(&dir).unwrap();
     }
 

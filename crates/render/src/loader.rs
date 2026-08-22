@@ -208,6 +208,24 @@ fn work(jobs: &Receiver<Job>, finished: &Sender<Done>, mut signal: UnixStream) {
 /// what makes a deleted or truncated cache file recover on its own. Only both failing is
 /// a failure.
 fn run(job: Job) -> Done {
+    let wallpaper = job.wallpaper.clone();
+    let mut done = read(job);
+    // The one place a buffer becomes premultiplied, so the copy and the source arrive at
+    // the GPU alike. After `cache::write`, which leaves the file straight.
+    if let Ok(decoded) = &mut done.result
+        && !decoded.opaque
+        && let Err(error) = decode::premultiply(decoded)
+    {
+        done.result = Err(error);
+    }
+    if let Ok(decoded) = &done.result {
+        debug!(path = %wallpaper.path().display(), opaque = decoded.opaque, "wallpaper ready");
+    }
+    done
+}
+
+/// The copy or the source, whichever answers, in straight alpha either way.
+fn read(job: Job) -> Done {
     let source = job.wallpaper.path();
     let usable = job.cache.as_ref().filter(|cache| cache.serves(job.size));
 
