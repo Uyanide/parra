@@ -370,6 +370,24 @@ Undoing the binding is removing the symlink it created:
 rm ~/.config/systemd/user/niri.service.wants/parra.service
 ```
 
+## Shell completions
+
+`parra completions SHELL` prints a completion script to stdout, for one of `bash`,
+`zsh`, `fish`, `powershell`, or `elvish`. Where it goes depends on the shell:
+
+```sh
+# bash, once bash-completion is installed:
+parra completions bash > ~/.local/share/bash-completion/completions/parra
+
+# zsh, into a directory on your $fpath:
+parra completions zsh > "${fpath[1]}/_parra"
+
+# fish:
+parra completions fish > ~/.config/fish/completions/parra.fish
+```
+
+New shells pick the scripts up on their next start.
+
 ## Configuration
 
 > [!NOTE]

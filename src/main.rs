@@ -6,7 +6,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{generate, Shell};
 use control::ClientError;
 use tracing_subscriber::EnvFilter;
 
@@ -73,6 +74,11 @@ enum Command {
     Reload,
     /// Check that the daemon is responding.
     Ping,
+    /// Print a completion script for SHELL to stdout.
+    Completions {
+        /// Shell to write the script for.
+        shell: Shell,
+    },
 }
 
 fn main() -> ExitCode {
@@ -92,6 +98,14 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli, started: Instant) -> anyhow::Result<()> {
+    // A completion script depends on nothing resolved below: print it to stdout and go.
+    let command = match cli.command {
+        Command::Completions { shell } => {
+            generate(shell, &mut Cli::command(), NAME, &mut std::io::stdout());
+            return Ok(());
+        }
+        command => command,
+    };
     let overrides = paths::Overrides {
         config: cli.config,
         socket: cli.socket,
@@ -99,7 +113,7 @@ fn run(cli: Cli, started: Instant) -> anyhow::Result<()> {
         cache_dir: cli.cache_dir,
     };
     let paths = paths::Paths::resolve(NAME, overrides)?;
-    match &cli.command {
+    match &command {
         Command::Daemon(args) => cmd::daemon::run(args, &paths, NAME, started),
         Command::Set(args) => cmd::set::run(args, &paths.socket),
         Command::Unset(args) => cmd::set::unset(args, &paths.socket),
@@ -109,6 +123,7 @@ fn run(cli: Cli, started: Instant) -> anyhow::Result<()> {
         Command::Events(args) => cmd::events::run(args, &paths.socket),
         Command::Reload => cmd::reload(&paths.socket),
         Command::Ping => cmd::ping(&paths.socket),
+        Command::Completions { .. } => unreachable!(),
     }
 }
 
@@ -148,6 +163,7 @@ mod tests {
             &["events"],
             &["reload"],
             &["ping"],
+            &["completions", "bash"],
         ] {
             let argv = [&[NAME][..], &globals, tail].concat();
             Cli::try_parse_from(argv).unwrap_or_else(|error| panic!("{}: {error}", tail[0]));
