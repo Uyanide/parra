@@ -20,7 +20,7 @@ jobs:
       - name: Install build prerequisites
         run: >
           apt-get update &&
-          apt-get install -y --no-install-recommends jq libegl-dev
+          apt-get install -y --no-install-recommends jq pkgconf libegl-dev libwayland-dev
 
       - name: Verify tag matches workspace version
         run: |
