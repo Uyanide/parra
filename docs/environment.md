@@ -63,12 +63,16 @@ hl.on("hyprland.start", function()
 end)
 ```
 
-In a systemd user unit:
+In a systemd user unit, set them with a drop-in rather than editing the unit;
+[examples/parra.service](../examples/parra.service) provides a base:
+
+```sh
+systemctl --user edit parra.service
+```
 
 ```ini
 [Service]
 Environment=DRI_PRIME=0
-ExecStart=%h/.local/bin/parra daemon
 ```
 
 ## Logging

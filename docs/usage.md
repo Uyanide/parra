@@ -322,6 +322,54 @@ hl.on("hyprland.start", function()
 end)
 ```
 
+## Autostart via Systemd-Unit
+
+> [!IMPORTANT]
+>
+> The guide in this section is **OPTIONAL**, parra can be started with a simple
+> start-up shell command in the configuration file of the compositor, e.g.
+> `spawn-at-startup "parra" "daemon"` for niri. In which case, please refer to
+> [Compositor integration](#compositor-integration) section above.
+
+Copy [examples/parra.service](../examples/parra.service) into a unit search path, e.g.
+`~/.config/systemd/user/`, point `ExecStart` at wherever the binary lives, and reload:
+
+```sh
+systemctl --user daemon-reload
+```
+
+The unit carries no `[Install]` section: rather than enabling it, bind it to the
+compositor's own session unit, so it autostarts and dies together with that compositor:
+
+```sh
+# under niri:
+systemctl --user add-wants niri.service parra.service
+
+# under a Hyprland session run through uwsm, whose instances are named after
+# the ID uwsm was started with:
+systemctl --user add-wants wayland-wm@hyprland.service parra.service
+```
+
+Both compositors export the session environment, `WAYLAND_DISPLAY` included, to the user
+manager, and both tie `graphical-session.target`, which the unit is ordered after and is
+a part of, to the compositor's lifetime. Plain Hyprland does neither, which leaves the
+unit nothing to hang off; running the session through [uwsm][uwsm] provides both and is
+the recommended setup there.
+
+[uwsm]: https://github.com/Vladimir-csp/uwsm
+
+To start it right away, without waiting for the next login:
+
+```sh
+systemctl --user start parra.service
+```
+
+Undoing the binding is removing the symlink it created:
+
+```sh
+rm ~/.config/systemd/user/niri.service.wants/parra.service
+```
+
 ## Configuration
 
 > [!NOTE]

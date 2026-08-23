@@ -1,0 +1,20 @@
+# parra wallpaper daemon, systemd user unit.
+#
+#   install -Dm644 -t ~/.config/systemd/user examples/parra.service
+#   systemctl --user daemon-reload
+#
+# Point ExecStart at wherever the binary lives.
+
+[Unit]
+Description=parra wallpaper daemon
+PartOf=graphical-session.target
+After=graphical-session.target
+
+# Keep retrying through longer outages, e.g. a driver upgrade, instead of
+# tripping the start limit and staying down until reset-failed.
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=/usr/bin/parra daemon
+Restart=on-failure
+RestartSec=2
