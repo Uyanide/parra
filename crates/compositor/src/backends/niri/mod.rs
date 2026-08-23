@@ -6,7 +6,7 @@ use std::env;
 use std::fmt;
 use std::path::PathBuf;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use tracing::{info, warn};
@@ -107,12 +107,18 @@ impl CompositorBackend for Backend {
     fn run(&mut self, sink: &dyn EventSink) -> Result<(), BackendError> {
         let mut retry = FIRST_RETRY;
         while sink.is_open() {
+            let started = Instant::now();
             match self.session(sink) {
                 Ok(()) => return Ok(()),
                 Err(error) => warn!(backend = NAME, %error, "connection lost, will retry"),
             }
             if !sink.is_open() {
                 break;
+            }
+            // A session that held for longer than the longest wait was a working one, so
+            // what ends it is a new outage and waits from the shortest again.
+            if started.elapsed() >= LONGEST_RETRY {
+                retry = FIRST_RETRY;
             }
             thread::sleep(retry);
             retry = (retry * 2).min(LONGEST_RETRY);
