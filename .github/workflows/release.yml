@@ -1,0 +1,51 @@
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # rust 1.88 & glibc 2.36
+    runs-on: ubuntu-latest
+    container: rust:1.88-bookworm
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build prerequisites
+        run: >
+          apt-get update &&
+          apt-get install -y --no-install-recommends jq libegl-dev
+
+      - name: Verify tag matches workspace version
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "parra") | .version')"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$version" != "$tag" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match workspace version $version"
+            exit 1
+          fi
+
+      - name: Build
+        run: cargo build --release --locked --workspace
+
+      - name: Test
+        run: cargo test --release --locked --workspace
+
+      - name: Package
+        run: |
+          tar -czf "parra-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz" -C target/release parra
+          sha256sum "parra-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz" \
+            > "parra-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz.sha256"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            parra-*-x86_64-unknown-linux-gnu.tar.gz
+            parra-*-x86_64-unknown-linux-gnu.tar.gz.sha256
+          generate_release_notes: true
