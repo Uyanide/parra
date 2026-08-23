@@ -345,7 +345,50 @@ knowledge of direction at all.
 
 The axes are configured apart because the compositor animates them apart, and one shared
 curve could only ever match one of the two. Which niri animation each pairs with is in
-[usage.md](usage.md#match-animations).
+[usage.md](usage.md#match-animations), and which Hyprland one in
+[usage.md](usage.md#match-hyprlands-animations).
+
+**A compositor with no position to report declares one instead.** Hyprland only names its
+workspaces: they are global rather than per monitor, and it creates and destroys them as
+they are used, so there is nothing it can be asked for that answers where a monitor sits.
+`[compositor] span` in its own file is the answer, and it is a backend key rather than a
+shared one because it is a fact about that compositor and no other. The backend turns a
+name into a `Stop` before anything leaves it, so the ceiling above holds: `domain` never
+learns the word workspace, and nothing downstream can tell the two compositors apart.
+
+Counting the live workspaces instead was the alternative, and it is worse in a way that has
+nothing to do with the boundary: the travel would change length whenever a workspace
+appeared or went away, moving the wallpaper with no user action behind it. A workspace the
+span does not list still has to land somewhere, which is why a numbered span clamps to its
+nearest entry rather than centring: centre is a position like any other, and in
+`["2", "4", "6"]` it is exactly where `"4"` sits.
+
+Distance alone leaves one case open, and only history can settle it. Two entries equally far
+off -- `"4"` between `"3"` and `"5"` -- go to whichever is nearer the workspace the monitor
+was showing before, so the wallpaper holds its side of the gap instead of crossing it on the
+way out and crossing back on the way home. The price is a position that is not a function of
+the compositor's state alone: the backend remembers the workspace each monitor came from,
+and a daemon started while a monitor already sits in a gap has nothing behind it to read and
+falls back to the lower-numbered entry. The memory and the fallback both stay inside the
+one tie the arithmetic cannot answer, and neither reaches above the `Stop` the backend
+emits.
+
+**The written order of a span decides where a stop sits and nothing else.** Reading it into
+the answer as well would place workspace `"4"` differently under `["3", "1", "5"]` and
+`["5", "1", "3"]`, which describe the same three stops, so the fallback goes by number and
+a workspace listed twice is refused outright -- two stops carrying one number cannot be told
+apart, and `"1"` and `"01"` are one number. What is left is an answer that depends on the
+set of stops and the workspace behind it, and on nothing about how either was typed. The
+thousand-workspace ceiling is a separate matter: it is there so a mistyped range is refused
+instead of expanded, and a span that long already moves the wallpaper by about a pixel per
+workspace.
+
+**A channel a compositor cannot drive is left undriven, not faked.** Hyprland reports no
+wider view of an output, so its backend never emits `ZoomedOut` and the channel stays where
+an undriven output already sits. That is the fixed crop `zoom.crop-ratio` asks for, which is
+also the headroom the parallax travels through, so the key goes on doing its main job with
+its animation never firing. Reporting `false` explicitly on every update would say the same
+thing at more cost, and there is nothing that could ever contradict it.
 
 **Both axes are per output, and the horizontal one had to be made so.** Focus is global in
 niri, so reading the column off the focused window answers for one monitor and leaves every
@@ -446,6 +489,24 @@ what everything else works through.
 That holds only while the new backend fits the four channels above. One that needs a fifth
 changes `domain` first and then everything downstream of it, which is what happened the
 last time this was tried. The ceiling is written down here rather than promised away.
+
+Hyprland was the second attempt and the test of it, and it fit. What it has that niri does
+not is a declared span, which turned out to be a setting rather than a channel: it belongs
+to one backend, it is read where that backend's other settings are, and the position it
+produces leaves as the same `Stop` any other compositor reports. The first attempt put it in
+`domain` and grew a `Workspace` vocabulary to carry it, which is the shape this seam exists
+to avoid.
+
+A backend that has to ask questions asks them sparingly. Hyprland's event socket carries
+changes only and never restates the world, so its backend reads a snapshot over the request
+socket at every connect, and again for the three events that leave a monitor showing
+something nothing stated: a workspace moved to another monitor, a workspace renumbered, and
+a monitor plugged in. Nothing on the event path asks, so no burst of compositor activity can
+become a queue of requests. That socket serves one connection at a time, and holding one
+open blocks every other client of it and the compositor's own handling of them: measured at
+three seconds of a wedged compositor for a connection held silent for three, against eight
+milliseconds for the same request unobstructed. So it is opened and closed around each
+request rather than kept.
 
 The backend's own settings are its `Params` type, deserialized from the `[compositor]`
 table. `config` carries that table across without reading it, and `compositor` takes a

@@ -6,9 +6,11 @@ Everything below assumes `parra` is on your `PATH`.
 ## TL;DR
 
 parra works with any compositor that supports wlr-layer-shell. Animated effects --
-scrolling, blurring, zooming -- need a supported compositor, and so far that is niri.
+scrolling, blurring, zooming -- need a supported compositor, and so far those are niri and
+Hyprland.
 
-For niri, run:
+<details>
+<summary>For niri</summary>
 
 ```bash
 cat > "${XDG_CONFIG_HOME:-${HOME}/.config}/niri/parra.kdl" << 'EOF_PARRA_KDL'
@@ -53,11 +55,55 @@ then restart niri, or start parra at once with:
 niri msg action spawn -- parra daemon
 ```
 
-and set the wallpaper you like:
+Then set the wallpaper you like:
 
 ```bash
 parra set /path/to/preferred/wallpaper.ext
 ```
+
+</details>
+
+<details>
+<summary>For Hyprland</summary>
+
+```bash
+cat > "${XDG_CONFIG_HOME:-${HOME}/.config}/hypr/parra.lua" << 'EOF_PARRA_LUA'
+hl.config({
+    misc = {
+        disable_hyprland_logo    = true,
+        disable_splash_rendering = true,
+    },
+})
+
+hl.curve("parra", { type = "bezier", points = { { 0.333, 1.0 }, { 0.667, 1.0 } } })
+
+for _, leaf in ipairs({ "workspaces", "workspacesIn", "workspacesOut" }) do
+    hl.animation({ leaf = leaf, enabled = true, speed = 3, bezier = "parra", style = "slide" })
+end
+
+hl.on("hyprland.start", function()
+    hl.exec_cmd("parra daemon")
+end)
+EOF_PARRA_LUA
+
+cat >> "${XDG_CONFIG_HOME:-${HOME}/.config}/hypr/hyprland.lua" << 'EOF_HYPRLAND_LUA'
+require("parra")
+EOF_HYPRLAND_LUA
+```
+
+Restart Hyprland, or start parra at once with:
+
+```bash
+hyprctl dispatch exec parra daemon
+```
+
+Then set the wallpaper you like:
+
+```bash
+parra set /path/to/preferred/wallpaper.ext
+```
+
+</details>
 
 > [!IMPORTANT]
 >
@@ -173,6 +219,109 @@ Finally, start the daemon at login:
 spawn-at-startup "parra" "daemon"
 ```
 
+### Hyprland
+
+All of this goes in `$XDG_CONFIG_HOME/hypr/hyprland.lua`, or `~/.config/hypr/hyprland.lua`
+if that variable is unset, or any file it requires.
+
+#### Declare the span
+
+Hyprland only names its workspaces. They are global rather than per monitor, and it creates
+and destroys them as they are used, so counting the live ones would resize the travel
+whenever a workspace appeared or went away. Say what the travel covers instead, in parra's
+own configuration file:
+
+```toml
+[compositor]
+span = 10
+```
+
+The numbering runs across every monitor rather than restarting on each, so a second monitor
+shows only part of that range and travels through only part of its wallpaper. Give it the
+workspaces it actually shows:
+
+```toml
+[output."eDP-1".compositor]
+span = ["6-8"]
+```
+
+Hyprland moves workspaces between monitors unless it is told not to, and while it does, no
+fixed list is right for either monitor for long. Binding them is what makes a declaration
+match what is on screen:
+
+```lua
+hl.workspace_rule({ workspace = 1, monitor = "DP-1", persistent = true })
+```
+
+A workspace outside a numbered span lands on the nearest one in it; outside a named span it
+sits centred. The full rules, and what `"6-8"` stands for, are in
+[config.md](config.md#the-span).
+
+#### Match Hyprland's animations
+
+Match Hyprland's animations to parra's, or the wallpaper will lead or lag the windows it
+sits behind. Two of Hyprland's have a counterpart here:
+
+| Hyprland node | parra section                                | Drives                  |
+| ------------- | -------------------------------------------- | ----------------------- |
+| `workspaces`  | `[scroll.horizontal]` or `[scroll.vertical]` | Parallax                |
+| `fadeSwitch`  | `[blur]`                                     | Focus blur              |
+| none          | `[zoom]`                                     | Zoom, which never moves |
+
+Hyprland measures `speed` in deciseconds, so a duration in milliseconds is `speed * 100`
+and parra's 300 ms default is `speed = 3`. Larger is slower, despite the name. The curve
+below is the exact bezier form of parra's `out-cubic`:
+
+```lua
+hl.curve("parra", { type = "bezier", points = { { 0.333, 1.0 }, { 0.667, 1.0 } } })
+
+for _, leaf in ipairs({ "workspaces", "workspacesIn", "workspacesOut" }) do
+    hl.animation({ leaf = leaf, enabled = true, speed = 3, bezier = "parra", style = "slide" })
+end
+```
+
+A switch reads `workspacesIn` and `workspacesOut`, and falls back to the `workspaces` they
+hang off only for what neither sets. The configuration Hyprland writes for a new session
+sets both to `fade`, so the two children are worth stating.
+
+The style decides which axis follows the workspace, since parra's vertical axis is only
+ever the vertical one. `slide` and `slidefade` travel sideways, which is what parra's own
+defaults expect, and `fade` travels nowhere at all. `slidevert` and `slidefadevert` travel
+vertically, and want the axis moved across to meet them:
+
+```toml
+[compositor]
+vertical = "workspace"
+horizontal = "none"
+```
+
+#### What Hyprland does not report
+
+Two of parra's effects have nothing to drive them here, and neither goes unsaid:
+
+- There is no position within a workspace. Hyprland's layouts publish nothing over IPC that
+  a second parallax axis could follow, so `[compositor]` takes no `"column"` value at all
+  and a file asking for one is refused when it is read.
+- There is no overview. What stands in for one is a plugin, and a plugin's dispatcher is
+  invisible from outside, so the zoom holds at whatever `[zoom] crop-ratio` implies, and the
+  daemon logs that nothing drives it when it connects. That is still doing its main job,
+  which is leaving headroom for the parallax to travel through.
+
+Blur follows the focused window rather than the focused monitor, so a monitor showing an
+empty workspace stays sharp. A launcher or other layer surface taking the keyboard leaves no
+window focused either; ask over the control socket if you want the wallpaper blurred while
+one is up, as [the blur signal](#the-blur-signal) describes.
+
+#### Start it at login
+
+Finally, start the daemon at login:
+
+```lua
+hl.on("hyprland.start", function()
+    hl.exec_cmd("parra daemon")
+end)
+```
+
 ## Configuration
 
 > [!NOTE]
@@ -181,12 +330,15 @@ spawn-at-startup "parra" "daemon"
 > built-in defaults are a working configuration. Only create the configuration file
 > when one is needed.
 
-parra reads one file per compositor, and under niri that is
-`$XDG_CONFIG_HOME/parra/niri.toml`, falling back to `~/.config/parra/niri.toml`.
+parra reads one file per compositor, named after the backend: `niri.toml` under niri and
+`hyprland.toml` under Hyprland. It looks in `$XDG_CONFIG_HOME/parra/`, falling back to
+`~/.config/parra/`. Note the lower case, which does not match the `Hyprland` that
+compositor puts in `$XDG_CURRENT_DESKTOP`.
 
 ```sh
 mkdir -p ~/.config/parra
-cp niri.example.toml ~/.config/parra/niri.toml   # from the repository root
+cp niri.example.toml ~/.config/parra/niri.toml           # from the repository root
+cp hyprland.example.toml ~/.config/parra/hyprland.toml   # or this one, under Hyprland
 ```
 
 Check a file before restarting anything:
@@ -293,7 +445,7 @@ parra state    # every output, what it shows, where its animations are
 ```
 
 `parra state` should list each connector with a size, a wallpaper path and a set of flags.
-If an output is missing, niri has not configured its layer surface yet.
+If an output is missing, the compositor has not configured its layer surface yet.
 
 `ping` exits 4 when the daemon speaks a different protocol from this binary, which means a
 daemon still running from before the binary was replaced. Restart it.

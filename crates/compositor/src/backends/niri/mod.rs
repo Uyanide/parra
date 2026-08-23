@@ -11,7 +11,6 @@ use std::time::Duration;
 use serde::Deserialize;
 use tracing::{info, warn};
 
-use self::socket::Stream;
 use self::translate::Tracker;
 use crate::backends::Scoped;
 use crate::{BackendError, CompositorBackend, EventSink};
@@ -125,7 +124,7 @@ impl CompositorBackend for Backend {
 impl Backend {
     /// One connection, from subscribing until it fails or the daemon stops.
     fn session(&self, sink: &dyn EventSink) -> Result<(), BackendError> {
-        let mut stream = Stream::open(&self.socket, NAME)?;
+        let mut stream = socket::open(&self.socket, NAME)?;
         info!(backend = NAME, socket = %self.socket.display(), "watching the compositor");
 
         let mut tracker = Tracker::default();

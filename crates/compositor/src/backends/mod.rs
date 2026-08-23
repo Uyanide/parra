@@ -1,3 +1,5 @@
+pub mod hyprland;
+mod lines;
 pub mod niri;
 
 use std::collections::BTreeMap;
@@ -9,7 +11,7 @@ use serde::{Deserialize, Deserializer, de::Error as _};
 use crate::{BackendError, CompositorBackend};
 
 /// Names of every backend this build has, in the order [`detect`] tries them.
-pub const AVAILABLE: &[&str] = &[niri::NAME];
+pub const AVAILABLE: &[&str] = &[niri::NAME, hyprland::NAME];
 
 /// The compositor running here, if it is one of [`AVAILABLE`].
 pub fn detect() -> Option<&'static str> {
@@ -20,6 +22,7 @@ pub fn detect() -> Option<&'static str> {
 pub fn is_running(backend: &str) -> bool {
     match backend {
         niri::NAME => niri::is_running(),
+        hyprland::NAME => hyprland::is_running(),
         _ => false,
     }
 }
@@ -53,6 +56,7 @@ impl<P> Scoped<P> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Settings {
     Niri(Scoped<niri::Params>),
+    Hyprland(Scoped<hyprland::Params>),
 }
 
 impl Settings {
@@ -60,6 +64,7 @@ impl Settings {
     pub fn backend(&self) -> &'static str {
         match self {
             Settings::Niri(_) => niri::NAME,
+            Settings::Hyprland(_) => hyprland::NAME,
         }
     }
 
@@ -72,6 +77,7 @@ impl Settings {
     ) -> Result<Settings, D::Error> {
         match backend {
             niri::NAME => Ok(Settings::Niri(Scoped::new(Deserialize::deserialize(de)?))),
+            hyprland::NAME => Ok(Settings::Hyprland(Scoped::new(Deserialize::deserialize(de)?))),
             _ => Err(D::Error::custom(format!("no compositor backend named {backend:?}"))),
         }
     }
@@ -85,6 +91,7 @@ impl Settings {
     ) -> Result<(), D::Error> {
         match self {
             Settings::Niri(scoped) => scoped.set_output(output, Deserialize::deserialize(de)?),
+            Settings::Hyprland(scoped) => scoped.set_output(output, Deserialize::deserialize(de)?),
         }
         Ok(())
     }
@@ -93,6 +100,7 @@ impl Settings {
     pub fn default_for(backend: &str) -> Option<Settings> {
         match backend {
             niri::NAME => Some(Settings::Niri(Scoped::new(niri::Params::default()))),
+            hyprland::NAME => Some(Settings::Hyprland(Scoped::new(hyprland::Params::default()))),
             _ => None,
         }
     }
@@ -104,6 +112,9 @@ impl Settings {
             Settings::Niri(scoped) => {
                 scoped.per_output.iter().map(|(id, p)| (id, p.to_string())).collect()
             }
+            Settings::Hyprland(scoped) => {
+                scoped.per_output.iter().map(|(id, p)| (id, p.to_string())).collect()
+            }
         }
     }
 }
@@ -112,6 +123,7 @@ impl fmt::Display for Settings {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Settings::Niri(scoped) => scoped.global.fmt(f),
+            Settings::Hyprland(scoped) => scoped.global.fmt(f),
         }
     }
 }
@@ -120,6 +132,7 @@ impl fmt::Display for Settings {
 pub fn connect(settings: &Settings) -> Result<Box<dyn CompositorBackend>, BackendError> {
     match settings {
         Settings::Niri(scoped) => Ok(Box::new(niri::Backend::connect(scoped.clone())?)),
+        Settings::Hyprland(scoped) => Ok(Box::new(hyprland::Backend::connect(scoped.clone())?)),
     }
 }
 
@@ -135,12 +148,22 @@ mod tests {
     fn niri_params(settings: &Settings, output: &str) -> niri::Params {
         match settings {
             Settings::Niri(scoped) => *scoped.for_output(&OutputId::new(output)),
+            other => panic!("expected niri settings, not {}", other.backend()),
+        }
+    }
+
+    fn hyprland_params(settings: &Settings, output: &str) -> hyprland::Params {
+        match settings {
+            Settings::Hyprland(scoped) => scoped.for_output(&OutputId::new(output)).clone(),
+            other => panic!("expected hyprland settings, not {}", other.backend()),
         }
     }
 
     #[test]
     fn an_absent_section_reads_as_the_backend_defaults() {
-        assert_eq!(parse(niri::NAME, "{}").unwrap(), Settings::default_for(niri::NAME).unwrap());
+        for backend in AVAILABLE {
+            assert_eq!(parse(backend, "{}").unwrap(), Settings::default_for(backend).unwrap());
+        }
     }
 
     #[test]
@@ -199,5 +222,50 @@ mod tests {
             &mut serde_json::Deserializer::from_str(r#"{"horizontal":"sideways"}"#),
         );
         assert!(error.is_err());
+    }
+
+    #[test]
+    fn a_hyprland_output_reads_the_span_until_it_says_otherwise() {
+        let mut settings = parse(hyprland::NAME, r#"{"span":5}"#).unwrap();
+        settings
+            .deserialize_output(
+                OutputId::new("DP-1"),
+                &mut serde_json::Deserializer::from_str(r#"{"span":["6","7","8"]}"#),
+            )
+            .unwrap();
+
+        let names = ["6", "7", "8"].map(str::to_owned).to_vec();
+        assert_eq!(hyprland_params(&settings, "DP-1").span, hyprland::Span::Names(names));
+        assert_eq!(hyprland_params(&settings, "eDP-1").span, hyprland::Span::Count(5));
+    }
+
+    #[test]
+    fn a_hyprland_override_is_reported_under_its_own_output() {
+        let mut settings = parse(hyprland::NAME, "{}").unwrap();
+        settings
+            .deserialize_output(
+                OutputId::new("DP-1"),
+                &mut serde_json::Deserializer::from_str(r#"{"vertical":"workspace"}"#),
+            )
+            .unwrap();
+
+        let reported = settings.overrides();
+        assert_eq!(reported.len(), 1);
+        assert_eq!(reported[0].0, &OutputId::new("DP-1"));
+        assert!(reported[0].1.contains("vertical=workspace"), "{}", reported[0].1);
+    }
+
+    /// A span of nothing has nowhere to travel, and reading it as a centred axis would
+    /// hide the typo rather than report it.
+    #[test]
+    fn an_empty_hyprland_span_is_refused() {
+        assert!(parse(hyprland::NAME, r#"{"span":0}"#).is_err());
+        assert!(parse(hyprland::NAME, r#"{"span":[]}"#).is_err());
+    }
+
+    /// niri's own second axis, which Hyprland has no position for.
+    #[test]
+    fn hyprland_has_no_column_to_follow() {
+        assert!(parse(hyprland::NAME, r#"{"horizontal":"column"}"#).is_err());
     }
 }

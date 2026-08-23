@@ -30,8 +30,11 @@ and with some extras:
 
 > [!NOTE]
 >
-> Only niri is supported so far. Support for more compositors might be added
-> in the (near) future.
+> niri and Hyprland are supported so far. Support for more compositors might be
+> added in the future.
+>
+> Not every effect exists on every compositor: e.g. Hyprland has no built-in
+> overview, so the zoom never moves there. See [usage.md](docs/usage.md).
 
 ## Dependencies
 

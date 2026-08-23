@@ -8,7 +8,7 @@ of its own.
 | Rendering GPU and driver       | libglvnd and driver environment variables              | Nothing. It does not enumerate or select devices.                                                       |
 | Which GPU buffers come from    | The compositor, via `zwp_linux_dmabuf_v1` feedback     | Nothing. It does not allocate dmabufs.                                                                  |
 | Wayland connection             | `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`                   | Connects with a null display name and lets libwayland resolve it.                                       |
-| Compositor IPC socket          | Whatever the compositor exports, such as `NIRI_SOCKET` | Reads that variable. No path is hardcoded.                                                              |
+| Compositor IPC socket          | Whatever the compositor exports: `NIRI_SOCKET` under niri, `HYPRLAND_INSTANCE_SIGNATURE` under Hyprland | Reads those variables. niri's names the socket outright; Hyprland's names a directory under `$XDG_RUNTIME_DIR/hypr/`, where the two socket names are the compositor's own and fixed. |
 | Where every file it owns lives | XDG Base Directory                                     | Derives paths from `XDG_CONFIG_HOME`, `XDG_RUNTIME_DIR`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` and `HOME`. |
 | Log level and filtering        | `RUST_LOG`                                             | Reads it. There is no config key for verbosity.                                                         |
 
@@ -53,6 +53,14 @@ In a niri config:
 
 ```kdl
 spawn-at-startup "sh" "-c" "DRI_PRIME=0 exec parra daemon"
+```
+
+In a Hyprland config:
+
+```lua
+hl.on("hyprland.start", function()
+    hl.exec_cmd("DRI_PRIME=0 exec parra daemon")
+end)
 ```
 
 In a systemd user unit:

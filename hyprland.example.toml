@@ -1,0 +1,134 @@
+# File: $XDG_CONFIG_HOME/parra/hyprland.toml
+#
+# Named after the backend, in lower case, rather than after $XDG_CURRENT_DESKTOP,
+# which Hyprland sets to "Hyprland".
+#
+# One file per compositor, and exactly one is read per run: the daemon detects
+# which compositor it is under and reads that one. Nothing here is shared with
+# another compositor's file.
+#
+# Every key below is optional and shown with its default.
+
+[general]
+# Layer-shell namespace, for compositor rules that match on it. Defaults to the
+# program's own name.
+#
+# Hyprland's `layerrule` matches on it. See docs/config.md.
+#namespace = "parra"
+
+# Which layer to sit on: "background" or "bottom".
+layer = "background"
+
+[wallpaper]
+# What to show when nothing has been set over the control socket. Absolute, or
+# `~`-prefixed, or relative to this file's directory.
+#
+# A wallpaper set with `parra set` is remembered across restarts and takes
+# precedence over this, so leaving it unset means the first start is blank and
+# every later one shows whatever was chosen last.
+#fallback = "~/pictures/wall.png"
+
+# What Hyprland position moves each parallax axis. It applies to every output.
+#
+#   "workspace"  the workspace that output is showing, placed by `span` below
+#   "none"       nothing, leaving the axis centred
+#
+# Sideways by default, because that is the way Hyprland moves a workspace
+# switch. There is no "column": Hyprland's layouts report no position within a
+# workspace.
+[compositor]
+vertical = "none"
+horizontal = "workspace"
+
+# The workspaces the travel covers, in the order it travels through them. A
+# number means the workspaces named "1" through "N"; a list names them instead,
+# and an entry like "3-6" is the range from "3" to "6":
+#
+#   span = ["browser", "code", "mail"]
+#   span = ["1-4", "mail"]
+#
+# Declared rather than counted, because Hyprland creates and destroys
+# workspaces as they are used. A workspace outside a numbered span lands on the
+# nearest one in it; outside a named span it sits centred. See docs/config.md.
+span = 10
+
+# One monitor can differ, inheriting whatever it leaves out. Hyprland numbers
+# workspaces across every monitor rather than per monitor, so a second monitor
+# usually wants the ones it actually shows:
+#
+# [output."eDP-1".compositor]
+# span = ["6-8"]
+
+[scroll.vertical]
+# Fraction of the available travel to use, measured about the centre. 1 uses all of
+# it, 0 pins the image to the centre, which is how an axis is turned off from here.
+travel = 1.0
+
+# Runs the axis the other way, so the first workspace sits where the last one
+# otherwise would. Measured about the centre, so a centred axis does not move.
+invert = false
+
+# Furthest the image may move between two adjacent stops of the span, in screen
+# heights here and screen widths on the horizontal axis. 0 lifts the cap. Only a
+# wallpaper much taller or wider than the screen ever has a stop long enough to
+# reach this.
+max-shift = 0.3
+
+# 0 makes the move instant.
+duration-ms = 300
+
+# linear, out-quad, in-out-quad, out-cubic, in-out-cubic, out-quint
+easing = "out-cubic"
+
+[scroll.horizontal]
+travel = 1.0
+invert = false
+max-shift = 0.3
+duration-ms = 300
+easing = "out-cubic"
+
+[blur]
+# 0 disables blur entirely, skipping the bake.
+radius = 32
+
+# Linear downscale of the baked blur texture. Higher is cheaper and smaller.
+downscale = 4
+
+# #rgb, #rgba, #rrggbb, #rrggbbaa
+tint = "#1e1e2e"
+
+# Multiplied into the tint's own alpha.
+tint-opacity = 0.5
+
+duration-ms = 300
+easing = "in-out-cubic"
+
+[zoom]
+# Fraction of the image visible, the rest being the headroom the parallax
+# scrolls through. 1.0 means no scrolling at all.
+#
+# Hyprland reports no wider view of an output to zoom back out to, so this is a
+# fixed crop and the two keys below never fire.
+crop-ratio = 0.9
+duration-ms = 300
+easing = "out-cubic"
+
+[transition]
+# "fade" crossfades the outgoing wallpaper into the incoming one, holding both in
+# video memory until it finishes, and fades one out on its own when nothing replaces
+# it. "none" swaps outright and costs nothing.
+mode = "fade"
+duration-ms = 800
+easing = "in-out-cubic"
+# Whether a wallpaper arriving on an output that has none fades up out of whatever the
+# compositor draws below, at startup and whenever a monitor is plugged in.
+at-start = true
+
+# Per-output overrides, keyed by connector name as the compositor reports it.
+# Any key left out is inherited from the sections above, `compositor` included.
+# [output."DP-1"]
+# blur.radius = 48
+# scroll.horizontal.travel = 0.5
+#
+# [output."eDP-1"]
+# wallpaper.fallback = "~/pictures/other.png"

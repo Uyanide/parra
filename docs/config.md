@@ -2,11 +2,14 @@
 
 One file per compositor, and exactly one is read per run. The daemon detects which
 compositor it is under and reads `$XDG_CONFIG_HOME/parra/<compositor>.toml`, falling back
-to `$HOME/.config/parra/`. Under niri that is `niri.toml`. `--config PATH` overrides the
+to `$HOME/.config/parra/`. Under niri that is `niri.toml`, and under Hyprland
+`hyprland.toml` -- named after the backend, in lower case, and not after
+`$XDG_CURRENT_DESKTOP`, which Hyprland sets to `Hyprland`. `--config PATH` overrides the
 location.
 
 A missing file is a working configuration: every key has a built-in default, and
-[niri.example.toml](../niri.example.toml) lists them all.
+[niri.example.toml](../niri.example.toml) and
+[hyprland.example.toml](../hyprland.example.toml) list them all.
 
 Nothing is shared between two compositors' files. Anyone running two writes their
 wallpaper, blur and transition settings in each, and there is no include mechanism.
@@ -66,8 +69,10 @@ shown.
 
 ### `[compositor]`
 
-The one section whose keys differ between compositors. Under niri it says which position
-moves each parallax axis:
+The one section whose keys differ between compositors. Under both it says which position
+moves each parallax axis, and under Hyprland also what that axis travels through.
+
+#### Under niri
 
 | Key          | Default       | Meaning                                                     |
 | ------------ | ------------- | ----------------------------------------------------------- |
@@ -86,7 +91,28 @@ own active workspace and that workspace's own column, so a monitor without the f
 its position. A workspace nothing has been focused on yet sits centred, and so does a
 monitor whose focused window is floating or fullscreen.
 
-One monitor can differ:
+#### Under Hyprland
+
+| Key          | Default       | Meaning                                                      |
+| ------------ | ------------- | ------------------------------------------------------------ |
+| `vertical`   | `"none"`      | `"workspace"` or `"none"`.                                   |
+| `horizontal` | `"workspace"` | Same values. `"none"` leaves the axis pinned to its centre.  |
+| `span`       | `10`          | The workspaces the travel covers. See [The span](#the-span). |
+
+```toml
+[compositor]
+vertical = "none"
+horizontal = "workspace"
+span = 10
+```
+
+Sideways by default, because that is the way Hyprland moves a workspace switch. There is
+no `"column"`: Hyprland's layouts report no position within a workspace, so a second axis
+would have nothing to follow that the first does not already.
+
+#### Override per monitor
+
+One monitor can differ, on either compositor:
 
 ```toml
 [compositor]
@@ -98,6 +124,87 @@ horizontal = "none"   # vertical stays "workspace"
 
 This section takes effect on the next start; see [Reloading](#reloading).
 `scroll.<axis>.travel` changes how far an axis moves while the daemon runs, `0` included.
+
+#### The span
+
+Hyprland only names its workspaces. They are global rather than per monitor, and it creates
+and destroys them as they are used, so there is no position it can report and no live count
+worth reading: counting the workspaces that happen to exist would change the length of the
+travel whenever one appeared or went away, moving the wallpaper with no user action behind
+it. `span` declares the travel instead.
+
+A number is shorthand for the workspaces named `"1"` through `"N"`:
+
+```toml
+[compositor]
+span = 10
+```
+
+A list names them in the order they should be travelled through, which is what workspaces
+carrying names need:
+
+```toml
+[compositor]
+span = ["browser", "code", "mail"]
+```
+
+An entry written `"3-6"` is the range `"3"` to `"6"`, both ends included, and expands where
+it stands. Written backwards it counts down, so `["9-7", "mail"]` travels `"9"`, `"8"`,
+`"7"`, `"mail"`. A hyphen anywhere but between digits belongs to a name, which leaves
+`"my-project"` and `"-1"` single workspaces.
+
+The order is the list's own, not the names sorted: `["3", "1", "5"]` puts `"1"` in the
+middle. It sets where each stop sits and nothing else, which is why the placement rules
+below go by number.
+
+No workspace may be listed twice, counting `"1"` and `"01"` as the same one, and a span
+covers at most 1000 of them.
+
+It is per output like everything else. Hyprland numbers workspaces across every monitor
+rather than restarting on each, so a second monitor shows only part of the range and
+travels through only part of its wallpaper. Give it the workspaces it actually shows:
+
+```toml
+[compositor]
+span = 5                       # everywhere, unless said otherwise below
+
+[output."HDMI-A-1".compositor]
+span = ["6", "7", "8"]         # the three this one actually shows
+```
+
+A count is shorthand for `"1"` through `"N"` and nothing else, so `span = 3` there would
+mean the workspaces `"1"`, `"2"` and `"3"`. It does not mean "three workspaces on this
+monitor". Anything else has to be named.
+
+The span is one coordinate space, and sharing it is what makes a monitor use only part of
+its travel. Leave `"1"` through `"5"` global while one monitor only ever shows `"2"`, and
+that monitor sits at 25% forever; a monitor showing `"1"`, `"3"` and `"4"` steps 0%, 50%,
+75% rather than evenly. Declaring each monitor's own workspaces is what gives it the whole
+travel and even steps between them.
+
+Two monitors may name the same workspace, which is allowed and often right: Hyprland can
+put it on either. Only the monitor actually showing it ever matches, so the two cannot
+disagree.
+
+A workspace the span does not list still has to land somewhere. Where every entry in the
+span is a number it lands on the nearest of them by number, which also clamps anything past
+either end. Two entries equally far off are settled by the workspace the monitor was showing
+before, the nearer of the two to that one winning:
+
+| `span`            | Was showing | Workspace | Sits at | Why                                 |
+| ----------------- | ----------- | --------- | ------- | ----------------------------------- |
+| `10`              | anything    | `"14"`    | `"10"`  | Past the last, so clamped to it     |
+| `["1", "3", "6"]` | anything    | `"5"`     | `"6"`   | Nearer `"6"` than `"3"`             |
+| `["3", "5"]`      | `"1"`       | `"4"`     | `"3"`   | Equally far; `"3"` is nearer `"1"`  |
+| `["3", "5"]`      | `"10"`      | `"4"`     | `"5"`   | Equally far; `"5"` is nearer `"10"` |
+| `["3", "5"]`      | nothing yet | `"4"`     | `"3"`   | Equally far, so the lower number    |
+
+The last row covers the daemon's first update after it starts, and a monitor whose
+earlier workspace has a name that no number describes.
+
+Where the span carries names there is no distance to measure, so an unlisted workspace sits
+centred instead. Centre is a position like any other: with `["2", "4", "6"]` it is exactly
+where `"4"` sits. A workspace whose name is not a number sits centred either way.
 
 ### `[scroll.vertical]` and `[scroll.horizontal]`
 
@@ -156,16 +263,16 @@ workspaces one switch drags the image over a screen height in 300 ms.
 
 `max-shift` states that distance in units the screen supplies. It is measured in screen
 heights on the vertical axis and screen widths on the horizontal one, and caps how far the
-image moves between two **adjacent** stops -- the next workspace along, or the next
-column.
+image moves between two **adjacent** stops -- the next workspace along, the next column,
+or the next entry in a Hyprland [span](#the-span).
 
 ```toml
 [scroll.vertical]
 max-shift = 0.3   # one workspace along never moves the image more than a third of a screen
 ```
 
-A jump across several stops at once, which a niri workspace switch can be, moves that many
-times the cap.
+A jump across several stops at once, which a niri workspace switch or a jump across a
+Hyprland span can be, moves that many times the cap.
 
 More stops loosen the cap. One stop is `1 / (stops - 1)` of the travel, so the more stops
 an axis has the shorter each one already is. On the wallpaper above, at `max-shift = 0.3`:
@@ -209,8 +316,8 @@ A compositor that pans the wallpaper continuously has no adjacent stop to measur
 | `duration-ms`  | `300`            |                                                                                                     |
 | `easing`       | `"in-out-cubic"` | See [easing functions](#easing-functions).                                                          |
 
-An output blurs when the compositor drives it to, which under niri means it holds the
-focused window, or when the control socket has asked for it; see
+An output blurs when the compositor drives it to, which under niri and Hyprland alike means
+it holds the focused window, or when the control socket has asked for it; see
 [usage.md](usage.md#the-blur-signal). Nothing focused anywhere leaves every output sharp.
 
 `radius` is measured in texels of the wallpaper texture, which is decoded at the buffer
@@ -230,7 +337,10 @@ as far as that part is there; see [usage.md](usage.md#transparent-wallpapers).
 | `easing`      | `"out-cubic"` | See [easing functions](#easing-functions).                                                                                                                                                           |
 
 An output zooms back out to the whole image when the compositor drives it to, which under
-niri means the overview is open.
+niri means the overview is open. Hyprland reports no wider view of an output, so nothing
+ever drives it there: `crop-ratio` is a fixed crop and the two keys beside it never fire.
+It is still doing its main job, which is leaving headroom for the parallax to travel
+through.
 
 The wallpaper is decoded at the size the deepest zoom needs, `monitor / crop-ratio` per
 axis, so a lower ratio costs more texture memory: at `0.25` that is sixteen times the area
