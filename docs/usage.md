@@ -337,8 +337,8 @@ compositor puts in `$XDG_CURRENT_DESKTOP`.
 
 ```sh
 mkdir -p ~/.config/parra
-cp niri.example.toml ~/.config/parra/niri.toml           # from the repository root
-cp hyprland.example.toml ~/.config/parra/hyprland.toml   # or this one, under Hyprland
+cp examples/niri.example.toml ~/.config/parra/niri.toml           # from the repository root
+cp examples/hyprland.example.toml ~/.config/parra/hyprland.toml   # or this one, under Hyprland
 ```
 
 Check a file before restarting anything:

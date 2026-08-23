@@ -8,8 +8,8 @@ to `$HOME/.config/parra/`. Under niri that is `niri.toml`, and under Hyprland
 location.
 
 A missing file is a working configuration: every key has a built-in default, and
-[niri.example.toml](../niri.example.toml) and
-[hyprland.example.toml](../hyprland.example.toml) list them all.
+[niri.example.toml](../examples/niri.example.toml) and
+[hyprland.example.toml](../examples/hyprland.example.toml) list them all.
 
 Nothing is shared between two compositors' files. Anyone running two writes their
 wallpaper, blur and transition settings in each, and there is no include mechanism.

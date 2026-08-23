@@ -482,9 +482,9 @@ slot, not the animation, which there is none of.
 ## Extension seams
 
 Adding a compositor means adding `compositor/src/backends/<name>/`, its arms in
-`backends/mod.rs`, and a `<name>.example.toml`. No other crate changes, and no crate but
-`compositor` names the backend at all: `AVAILABLE`, `detect`, `Params` and `connect` are
-what everything else works through.
+`backends/mod.rs`, and a `examples/<name>.example.toml`. No other crate changes, and no
+crate but `compositor` names the backend at all: `AVAILABLE`, `detect`, `Params` and
+`connect` are what everything else works through.
 
 That holds only while the new backend fits the four channels above. One that needs a fifth
 changes `domain` first and then everything downstream of it, which is what happened the

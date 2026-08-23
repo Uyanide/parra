@@ -383,8 +383,8 @@ mod tests {
     /// Found by pattern rather than by name, since there is one example per compositor.
     #[test]
     fn the_example_configs_state_the_real_defaults() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let examples: Vec<PathBuf> = std::fs::read_dir(&root)
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+        let examples: Vec<PathBuf> = std::fs::read_dir(&dir)
             .expect("the repository root should be readable")
             .filter_map(|entry| {
                 let path = entry.ok()?.path();

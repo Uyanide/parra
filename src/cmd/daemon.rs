@@ -150,9 +150,9 @@ mod tests {
     /// that for every section but `[compositor]`, whose keys only a backend can read.
     #[test]
     fn every_example_compositor_section_states_the_real_defaults() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
         for backend in backends::AVAILABLE {
-            let path = root.join(format!("{backend}.example.toml"));
+            let path = dir.join(format!("{backend}.example.toml"));
             let text = std::fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("{} should be readable: {e}", path.display()));
             let file: toml::Table = toml::from_str(&text).expect("the example should be valid");
@@ -160,11 +160,11 @@ mod tests {
                 file.get("compositor").cloned().unwrap_or_else(|| toml::Table::new().into());
 
             let parsed = backends::Settings::deserialize(backend, section)
-                .unwrap_or_else(|e| panic!("{backend}.example.toml: [compositor]: {e}"));
+                .unwrap_or_else(|e| panic!("examples/{backend}.example.toml: [compositor]: {e}"));
             assert_eq!(
                 parsed,
                 backends::Settings::default_for(backend).unwrap(),
-                "{backend}.example.toml has drifted from that backend's defaults"
+                "examples/{backend}.example.toml has drifted from that backend's defaults"
             );
         }
     }
