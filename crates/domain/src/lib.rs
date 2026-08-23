@@ -16,7 +16,7 @@ pub mod zoom;
 pub use anim::{Animated, Easing, Motion, Move, Tween};
 pub use blur::BlurState;
 pub use color::Rgba;
-pub use geometry::{Limit, Limits, UvRect, sample_rect};
+pub use geometry::{Limit, Limits, UvRect, Zoom, sample_rect};
 pub use monitor::{MonitorState, Moves};
 pub use output::{LogicalSize, OutputId, PixelSize, SCALE_DENOMINATOR, Scale};
 pub use params::{

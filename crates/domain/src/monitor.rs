@@ -1,6 +1,6 @@
 use crate::anim::{Motion, Move};
 use crate::blur::BlurState;
-use crate::geometry::{Limit, Limits, UvRect, sample_rect};
+use crate::geometry::{Limit, Limits, UvRect, Zoom, sample_rect};
 use crate::output::{LogicalSize, OutputId, PixelSize, Scale};
 use crate::params::OutputParams;
 use crate::policy::Targets;
@@ -68,7 +68,7 @@ impl MonitorState {
         sample_rect(
             image,
             self.buffer_size(),
-            self.zoom.factor.value(),
+            Zoom { at: self.zoom.factor.value(), deepest: self.params.zoom.factor() },
             self.scroll.h.value(),
             self.scroll.v.value(),
             self.limits(),

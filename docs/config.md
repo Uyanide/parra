@@ -284,10 +284,13 @@ an axis has the shorter each one already is. On the wallpaper above, at `max-shi
 | 5          | 0.56                 | 0.30         | 1.20                       |
 | 6          | 0.45                 | 0.30         | 1.50                       |
 
-Three more things it does:
+Four more things it does:
 
 - `travel` narrows the range a stop is taken from, so `travel = 0.5` halves the distance
   the cap measures and the cap does half as much.
+- It is measured at the crop [`zoom.crop-ratio`](#zoom) fixes, which is the closest in the
+  wallpaper ever sits. A stop moves the image less than this while the output is zoomed
+  out.
 - `0` lifts the cap. Pinning an axis is `travel = 0`, so one monitor asks for the whole
   travel back with:
 

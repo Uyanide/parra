@@ -31,7 +31,8 @@ pub struct Limit {
     /// driven over. `0` is a channel that pans continuously and so never jumps.
     pub stride: f32,
     /// Greatest distance the image may move between two adjacent stops, in screen
-    /// extents of this axis. `None` lifts the cap.
+    /// extents of this axis, measured at the deepest zoom the output reaches. `None`
+    /// lifts the cap.
     pub max_shift: Option<f32>,
 }
 
@@ -50,40 +51,67 @@ impl Limits {
     };
 }
 
-/// How much of one axis's travel the cap leaves, in the same normalized image units.
+/// Where the zoom is, beside the deepest the same output reaches.
+///
+/// - `at` sizes the sampled rect.
+/// - `deepest` is where the shift cap is measured, which holds the cap still while `at`
+///   animates. See `docs/architecture.md`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Zoom {
+    pub at: f32,
+    pub deepest: f32,
+}
+
+impl Zoom {
+    /// An output that is not animating, where the two are one number.
+    pub const fn fixed(zoom: f32) -> Self {
+        Self { at: zoom, deepest: zoom }
+    }
+}
+
+/// Fraction of one axis's travel the cap leaves.
 ///
 /// `span / visible` is that travel measured in screens, which is the unit `max_shift` is
 /// written in, so one stop of it comes to `span / visible * stride`. Capping that distance
-/// scales the whole mapping by the same factor, which is why the answer is a shortened
-/// span rather than a clamp on the position.
+/// scales the whole mapping by the same factor, which is why the answer is a fraction of
+/// the travel rather than a clamp on the position.
 ///
-/// Three cases leave the span alone: no cap asked for, an axis that never jumps, and one
+/// Three cases leave the whole of it: no cap asked for, an axis that never jumps, and one
 /// with nothing on screen to measure a screen by.
-fn allowed(span: f32, visible: f32, limit: Limit) -> f32 {
-    let Some(max_shift) = limit.max_shift else { return span };
+fn allowed_fraction(span: f32, visible: f32, limit: Limit) -> f32 {
+    let Some(max_shift) = limit.max_shift else { return 1.0 };
     if limit.stride <= 0.0 || visible <= 0.0 {
-        return span;
+        return 1.0;
     }
     let shift = span / visible * limit.stride;
-    if shift <= max_shift { span } else { span * (max_shift / shift) }
+    if shift <= max_shift { 1.0 } else { max_shift / shift }
 }
 
-/// Fits the image over the viewport, zooms in by `zoom`, then pans within whatever
+/// A zoom as the geometry reads it. The cover is already the largest rect that keeps the
+/// viewport's aspect, so anything below `1` or non-finite counts as `1`.
+fn factor(zoom: f32) -> f32 {
+    if zoom.is_finite() { zoom.max(1.0) } else { 1.0 }
+}
+
+/// Extent of the sampled rect on one axis, as a fraction of the image.
+fn visible(cover: f32, zoom: f32) -> f32 {
+    (cover / zoom).clamp(f32::MIN_POSITIVE, 1.0)
+}
+
+/// Fits the image over the viewport, zooms in by `zoom.at`, then pans within whatever
 /// headroom that leaves.
 ///
 /// - The fit always covers: the image is scaled until it spans both axes, so no
 ///   letterbox can appear.
-/// - `zoom` never drops below `1`: the cover is already the largest rect that keeps the
-///   viewport's aspect, so a smaller or non-finite factor counts as `1`.
-/// - The travel is what the cover leaves outside the viewport, plus what `zoom` adds,
-///   shortened by whatever [`Limits`] allows.
+/// - The travel is what the cover leaves outside the viewport, plus what `zoom.at` adds,
+///   shortened by the fraction [`Limits`] allows at `zoom.deepest`.
 /// - `scroll_h` and `scroll_v` are fractions of that travel, `0` at the left or top edge
 ///   and `1` at the right or bottom.
 /// - An axis with no headroom ignores its value.
 pub fn sample_rect(
     image: PixelSize,
     viewport: PixelSize,
-    zoom: f32,
+    zoom: Zoom,
     scroll_h: f32,
     scroll_v: f32,
     limits: Limits,
@@ -100,16 +128,22 @@ pub fn sample_rect(
         (1.0, image_aspect / viewport_aspect)
     };
 
-    let zoom = if zoom.is_finite() { zoom.max(1.0) } else { 1.0 };
-    let w = (cover_w / zoom).clamp(f32::MIN_POSITIVE, 1.0);
-    let h = (cover_h / zoom).clamp(f32::MIN_POSITIVE, 1.0);
+    let at = factor(zoom.at);
+    let w = visible(cover_w, at);
+    let h = visible(cover_h, at);
+
+    // The deepest zoom is where a stop moves furthest, so a fraction taken there holds the
+    // cap at every zoom, and a zoom animation only ever scales it.
+    let deepest = factor(zoom.deepest).max(at);
+    let w_deepest = visible(cover_w, deepest);
+    let h_deepest = visible(cover_h, deepest);
 
     // Shortened about the centre rather than from one edge, so a cap moves the wallpaper
     // less without also sliding it toward the top or the left.
     let span_h = 1.0 - w;
     let span_v = 1.0 - h;
-    let allowed_h = allowed(span_h, w, limits.h);
-    let allowed_v = allowed(span_v, h, limits.v);
+    let allowed_h = span_h * allowed_fraction(1.0 - w_deepest, w_deepest, limits.h);
+    let allowed_v = span_v * allowed_fraction(1.0 - h_deepest, h_deepest, limits.v);
 
     let u0 = (span_h - allowed_h) * 0.5 + allowed_h * scroll_h.clamp(0.0, 1.0);
     let v0 = (span_v - allowed_v) * 0.5 + allowed_v * scroll_v.clamp(0.0, 1.0);
@@ -131,7 +165,7 @@ mod tests {
         let rect = sample_rect(
             PixelSize::new(2560, 1440),
             PixelSize::new(2560, 1440),
-            1.0,
+            Zoom::fixed(1.0),
             0.5,
             0.5,
             Limits::NONE,
@@ -144,7 +178,7 @@ mod tests {
         let rect = sample_rect(
             PixelSize::new(1000, 2000),
             PixelSize::new(1000, 1000),
-            1.0,
+            Zoom::fixed(1.0),
             0.5,
             0.5,
             Limits::NONE,
@@ -159,7 +193,7 @@ mod tests {
         let rect = sample_rect(
             PixelSize::new(2000, 1000),
             PixelSize::new(1000, 1000),
-            1.0,
+            Zoom::fixed(1.0),
             0.5,
             0.5,
             Limits::NONE,
@@ -172,9 +206,12 @@ mod tests {
     #[test]
     fn zoom_creates_headroom_where_the_cover_left_none() {
         let square = PixelSize::new(1000, 1000);
-        assert_eq!(sample_rect(square, square, 1.0, 0.5, 0.5, Limits::NONE), UvRect::FULL);
+        assert_eq!(
+            sample_rect(square, square, Zoom::fixed(1.0), 0.5, 0.5, Limits::NONE),
+            UvRect::FULL
+        );
 
-        let zoomed = sample_rect(square, square, 1.0 / 0.9, 0.5, 0.0, Limits::NONE);
+        let zoomed = sample_rect(square, square, Zoom::fixed(1.0 / 0.9), 0.5, 0.0, Limits::NONE);
         assert_close(zoomed.height(), 0.9, "height");
         assert_close(zoomed.v0, 0.0, "pinned to the top");
     }
@@ -184,11 +221,11 @@ mod tests {
         let image = PixelSize::new(1000, 2000);
         let viewport = PixelSize::new(1000, 1000);
 
-        let top = sample_rect(image, viewport, 1.0, 0.5, 0.0, Limits::NONE);
+        let top = sample_rect(image, viewport, Zoom::fixed(1.0), 0.5, 0.0, Limits::NONE);
         assert_close(top.v0, 0.0, "top");
         assert_close(top.v1, 0.5, "top");
 
-        let bottom = sample_rect(image, viewport, 1.0, 0.5, 1.0, Limits::NONE);
+        let bottom = sample_rect(image, viewport, Zoom::fixed(1.0), 0.5, 1.0, Limits::NONE);
         assert_close(bottom.v0, 0.5, "bottom");
         assert_close(bottom.v1, 1.0, "bottom");
     }
@@ -199,7 +236,8 @@ mod tests {
         let viewport = PixelSize::new(2560, 1600);
         for zoom in [1.0, 1.111, 4.0] {
             for scroll in [0.0, 0.37, 1.0] {
-                let rect = sample_rect(image, viewport, zoom, scroll, scroll, Limits::NONE);
+                let rect =
+                    sample_rect(image, viewport, Zoom::fixed(zoom), scroll, scroll, Limits::NONE);
                 assert!(rect.u0 >= -EPS && rect.u1 <= 1.0 + EPS, "u out of range at {zoom}");
                 assert!(rect.v0 >= -EPS && rect.v1 <= 1.0 + EPS, "v out of range at {zoom}");
             }
@@ -219,8 +257,8 @@ mod tests {
     /// How far the wallpaper moves between the two ends of the axis, in screen heights.
     fn excursion(limits: Limits) -> f32 {
         let (image, viewport) = tall();
-        let top = sample_rect(image, viewport, ZOOM, 0.5, 0.0, limits);
-        let bottom = sample_rect(image, viewport, ZOOM, 0.5, 1.0, limits);
+        let top = sample_rect(image, viewport, Zoom::fixed(ZOOM), 0.5, 0.0, limits);
+        let bottom = sample_rect(image, viewport, Zoom::fixed(ZOOM), 0.5, 1.0, limits);
         (bottom.v0 - top.v0) / top.height()
     }
 
@@ -252,11 +290,11 @@ mod tests {
     fn a_cap_shortens_about_the_centre_rather_than_from_an_edge() {
         let (image, viewport) = tall();
         let limits = capped(1.0, 0.5);
-        let centre = sample_rect(image, viewport, ZOOM, 0.5, 0.5, limits);
-        assert_eq!(centre, sample_rect(image, viewport, ZOOM, 0.5, 0.5, Limits::NONE));
+        let centre = sample_rect(image, viewport, Zoom::fixed(ZOOM), 0.5, 0.5, limits);
+        assert_eq!(centre, sample_rect(image, viewport, Zoom::fixed(ZOOM), 0.5, 0.5, Limits::NONE));
 
-        let top = sample_rect(image, viewport, ZOOM, 0.5, 0.0, limits);
-        let bottom = sample_rect(image, viewport, ZOOM, 0.5, 1.0, limits);
+        let top = sample_rect(image, viewport, Zoom::fixed(ZOOM), 0.5, 0.0, limits);
+        let bottom = sample_rect(image, viewport, Zoom::fixed(ZOOM), 0.5, 1.0, limits);
         assert_close(centre.v0 - top.v0, bottom.v0 - centre.v0, "symmetric about the centre");
     }
 
@@ -273,7 +311,7 @@ mod tests {
             v: Limit { stride: 1.0, max_shift: Some(8.0) },
             h: Limit { stride: 1.0, max_shift: Some(8.0) },
         };
-        assert_eq!(sample_rect(square, square, 1.0, 0.5, 0.5, limits), UvRect::FULL);
+        assert_eq!(sample_rect(square, square, Zoom::fixed(1.0), 0.5, 0.5, limits), UvRect::FULL);
     }
 
     #[test]
@@ -284,23 +322,84 @@ mod tests {
             h: Limit { stride: 1.0, max_shift: Some(0.25) },
             v: Limit { stride: 0.0, max_shift: Some(0.25) },
         };
-        let top_left = sample_rect(image, viewport, 2.0, 0.0, 0.0, limits);
-        let bottom_right = sample_rect(image, viewport, 2.0, 1.0, 1.0, limits);
-        let uncapped = sample_rect(image, viewport, 2.0, 1.0, 1.0, Limits::NONE);
+        let top_left = sample_rect(image, viewport, Zoom::fixed(2.0), 0.0, 0.0, limits);
+        let bottom_right = sample_rect(image, viewport, Zoom::fixed(2.0), 1.0, 1.0, limits);
+        let uncapped = sample_rect(image, viewport, Zoom::fixed(2.0), 1.0, 1.0, Limits::NONE);
 
         assert!(bottom_right.u0 - top_left.u0 < uncapped.u0, "the stepped axis is capped");
         assert_close(bottom_right.v0, uncapped.v0, "the continuous one is not");
+    }
+
+    /// The geometry this was reported on: a 3364x2564 image on a 2560x1600 output with two
+    /// workspaces puts the zoom the cap starts binding at inside the range the overview
+    /// animates over.
+    fn straddling() -> (PixelSize, PixelSize) {
+        (PixelSize::new(3364, 2564), PixelSize::new(2560, 1600))
+    }
+
+    #[test]
+    fn a_zoom_animation_stays_between_the_two_ends_it_moves_between() {
+        let (image, viewport) = straddling();
+        let limits = capped(1.0, 0.3);
+        let deepest = ZOOM;
+        let centre = |at: f32, scroll: f32| {
+            let rect = sample_rect(image, viewport, Zoom { at, deepest }, 0.5, scroll, limits);
+            rect.v0 + rect.height() * 0.5
+        };
+
+        for scroll in [0.0, 1.0] {
+            let (settled_out, settled_in) = (centre(1.0, scroll), centre(deepest, scroll));
+            let (low, high) = (settled_out.min(settled_in), settled_out.max(settled_in));
+            for step in 0..=64 {
+                let at = 1.0 + (deepest - 1.0) * step as f32 / 64.0;
+                let seen = centre(at, scroll);
+                assert!(
+                    seen >= low - EPS && seen <= high + EPS,
+                    "zoom {at} at scroll {scroll} left {low}..{high} for {seen}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn one_stop_stays_within_the_cap_at_every_zoom() {
+        let (image, viewport) = straddling();
+        let limits = capped(1.0, 0.3);
+        let deepest = ZOOM;
+        for step in 0..=16 {
+            let at = 1.0 + (deepest - 1.0) * step as f32 / 16.0;
+            let zoom = Zoom { at, deepest };
+            let top = sample_rect(image, viewport, zoom, 0.5, 0.0, limits);
+            let bottom = sample_rect(image, viewport, zoom, 0.5, 1.0, limits);
+            let moved = (bottom.v0 - top.v0) / top.height();
+            assert!(moved <= 0.3 + EPS, "{moved} screens at zoom {at}");
+        }
+    }
+
+    #[test]
+    fn the_deepest_zoom_is_where_a_stop_moves_furthest() {
+        let (image, viewport) = straddling();
+        let limits = capped(1.0, 0.3);
+        let deepest = ZOOM;
+        let moved = |at: f32| {
+            let zoom = Zoom { at, deepest };
+            let top = sample_rect(image, viewport, zoom, 0.5, 0.0, limits);
+            let bottom = sample_rect(image, viewport, zoom, 0.5, 1.0, limits);
+            (bottom.v0 - top.v0) / top.height()
+        };
+        assert_close(moved(deepest), 0.3, "the cap is met where it is measured");
+        assert!(moved(1.0) < moved(deepest), "a shallower zoom moves less");
     }
 
     #[test]
     fn a_degenerate_size_falls_back_to_the_full_image() {
         let ok = PixelSize::new(100, 100);
         assert_eq!(
-            sample_rect(PixelSize::new(0, 100), ok, 1.0, 0.5, 0.5, Limits::NONE),
+            sample_rect(PixelSize::new(0, 100), ok, Zoom::fixed(1.0), 0.5, 0.5, Limits::NONE),
             UvRect::FULL
         );
         assert_eq!(
-            sample_rect(ok, PixelSize::new(100, 0), 1.0, 0.5, 0.5, Limits::NONE),
+            sample_rect(ok, PixelSize::new(100, 0), Zoom::fixed(1.0), 0.5, 0.5, Limits::NONE),
             UvRect::FULL
         );
     }
@@ -309,10 +408,10 @@ mod tests {
     fn a_zoom_below_one_is_floored_rather_than_zooming_out() {
         let image = PixelSize::new(3840, 2160);
         let viewport = PixelSize::new(2560, 1600);
-        let unzoomed = sample_rect(image, viewport, 1.0, 0.37, 0.37, Limits::NONE);
+        let unzoomed = sample_rect(image, viewport, Zoom::fixed(1.0), 0.37, 0.37, Limits::NONE);
         for zoom in [0.5, 0.9, f32::MIN_POSITIVE] {
             assert_eq!(
-                sample_rect(image, viewport, zoom, 0.37, 0.37, Limits::NONE),
+                sample_rect(image, viewport, Zoom::fixed(zoom), 0.37, 0.37, Limits::NONE),
                 unzoomed,
                 "zoom {zoom}"
             );
@@ -324,7 +423,7 @@ mod tests {
         let square = PixelSize::new(100, 100);
         for zoom in [0.0, -1.0, f32::NAN, f32::INFINITY] {
             assert_eq!(
-                sample_rect(square, square, zoom, 0.5, 0.5, Limits::NONE),
+                sample_rect(square, square, Zoom::fixed(zoom), 0.5, 0.5, Limits::NONE),
                 UvRect::FULL,
                 "zoom {zoom}"
             );

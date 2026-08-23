@@ -318,11 +318,26 @@ inside each backend's own `progress`.
 
 The configuration half does not travel the other way. `max-shift` is applied in
 `geometry::sample_rect`, which is the only layer holding the image size, the viewport size
-and the zoom the axis is actually at, and which runs per wallpaper slot and per frame. So a
-resize, a hotplug, a wallpaper swap and the overview animation all come out right with
-nothing to re-resolve, and `compositor` goes on reading no shared configuration at all.
-Sending it a cap instead would mean a backend reading geometry it cannot see, at connect
-time, and never hearing that any of it changed.
+and the zoom, and which runs per wallpaper slot and per frame. So a resize, a hotplug, a
+wallpaper swap and the overview animation all come out right with nothing to re-resolve,
+and `compositor` goes on reading no shared configuration at all. Sending it a cap instead
+would mean a backend reading geometry it cannot see, at connect time, and never hearing
+that any of it changed.
+
+**The cap is measured at the deepest zoom an output reaches, and `domain::Zoom` carries
+that second number for no other reason.** The fraction of an axis's travel a cap leaves is
+`max_shift * visible / (stride * span)`, where `visible` shrinks and `span` grows as the
+zoom deepens: the fraction is smallest at the deepest zoom, so a fraction taken there holds
+`max-shift` at every zoom shallower than it, and the deepest zoom is where a stop moves
+furthest. Measuring at the live zoom holds the cap too, but only one zoom at a time. It
+makes the fraction a function of an animating number, and an overview animation whose range
+straddles the zoom at which the cap starts binding then watches the available travel rise
+and fall again inside one 300 ms move: a wallpaper parked at either end of the axis sets
+off one way, turns around, and arrives from the other. A 3364x2564 image on a 2560x1600
+output with two workspaces is such a case at the default crop, and it is what the rule
+above exists to prevent. Fixing the fraction leaves the settled zoomed-in rect exactly
+where it was and makes the animation a scaling of one mapping rather than a walk across
+two, at the price of an overview that uses slightly less than the cap allows.
 
 Everything is per output. That niri blurs at most one output at a time, and zooms every
 output out together, are niri's rules rather than the boundary's: its backend states a
