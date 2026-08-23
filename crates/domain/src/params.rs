@@ -88,7 +88,7 @@ impl Default for BlurParams {
         Self {
             radius: 32,
             downscale: 4,
-            tint: Rgba::from_bytes([0x1e, 0x1e, 0x2e, 0xff]),
+            tint: Rgba::from_bytes([0x10, 0x10, 0x10, 0xff]),
             tint_opacity: 0.5,
             tween: Tween::new(0.3, Easing::InOutCubic),
         }

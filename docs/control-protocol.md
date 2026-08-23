@@ -117,7 +117,7 @@ see [config.md](config.md#reloading).
         "amount": { "current": 1.0, "target": 1.0 },
         "radius": 32,
         "downscale": 4,
-        "tint": "#1e1e2e80"
+        "tint": "#10101080"
       },
       "zoom": { "current": 1.111, "target": 1.111 },
       "channels": {

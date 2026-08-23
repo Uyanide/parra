@@ -76,7 +76,7 @@ radius = 32
 downscale = 4
 
 # #rgb, #rgba, #rrggbb, #rrggbbaa
-tint = "#1e1e2e"
+tint = "#101010"
 
 # Multiplied into the tint's own alpha.
 tint-opacity = 0.5

@@ -314,7 +314,7 @@ A compositor that pans the wallpaper continuously has no adjacent stop to measur
 | -------------- | ---------------- | --------------------------------------------------------------------------------------------------- |
 | `radius`       | `32`             | `0` disables blur entirely, including the bake. Capped at 512.                                      |
 | `downscale`    | `4`              | Linear downscale of the baked blur texture, `1..=16`. Higher is cheaper in both VRAM and bake time. |
-| `tint`         | `"#1e1e2e"`      | `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`.                                                          |
+| `tint`         | `"#101010"`      | `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`.                                                          |
 | `tint-opacity` | `0.5`            | `0..=1`, multiplied into the tint's own alpha.                                                      |
 | `duration-ms`  | `300`            |                                                                                                     |
 | `easing`       | `"in-out-cubic"` | See [easing functions](#easing-functions).                                                          |
