@@ -15,7 +15,7 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install build prerequisites
         run: >
@@ -43,7 +43,7 @@ jobs:
           sha256sum "parra-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz" \
             > "parra-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz.sha256"
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: |
             parra-*-x86_64-unknown-linux-gnu.tar.gz
