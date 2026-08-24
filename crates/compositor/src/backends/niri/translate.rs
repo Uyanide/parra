@@ -584,8 +584,6 @@ mod tests {
         assert!(blurred(&tracker.drives(&everywhere(params))).is_empty());
     }
 
-    /// A floating or fullscreen window has no place in the scroll, which is a statement
-    /// about where it sits rather than about whether it is there.
     #[test]
     fn a_window_with_no_column_still_fills_a_workspace() {
         let mut tracker = populated();

@@ -57,9 +57,8 @@ pub enum Event {
     },
     /// Whether any window holds the focus at all.
     ///
-    /// Carries no monitor because the focused window is always on the focused one. What
-    /// matters here is only the difference between some window and none, since a monitor
-    /// showing an empty workspace has the focus without anything on it being focused.
+    /// Carries no monitor. Where that window is has to be read from what the focused monitor
+    /// shows, which holds because this fires only when a window really takes or loses it.
     ActiveWindow {
         focused: bool,
     },
@@ -240,12 +239,15 @@ pub struct Client {
 
 /// What `j/activewindow` says, which is `{}` when the focus is on no window at all.
 ///
-/// The address is never used for anything; it is read only because its presence is what
-/// tells a focused window apart from none, which is the same thing `activewindowv2`
-/// reports once the stream is running.
+/// The address is read for its presence alone, which tells a focused window from none and
+/// is the same thing `activewindowv2` reports once the stream is running.
+///
+/// The workspace says where that window is, which no event ever does. Read only at cold
+/// start, where there is no earlier event to have said it.
 #[derive(Debug, Default, Deserialize)]
 pub struct ActiveWindow {
     pub address: Option<String>,
+    pub workspace: Option<WorkspaceRef>,
 }
 
 /// A refused request answers in plain words rather than JSON, so a parse failure is how one
@@ -403,6 +405,10 @@ mod tests {
 
         let some: ActiveWindow = decode(r#"{"address":"0x55c3da6fa460","class":"kitty"}"#).unwrap();
         assert!(some.address.is_some());
+
+        let placed: ActiveWindow =
+            decode(r#"{"address":"0x1","workspace":{"id":14,"name":"5"}}"#).unwrap();
+        assert_eq!(placed.workspace.map(|workspace| workspace.id), Some(14));
     }
 
     #[test]

@@ -25,8 +25,8 @@ pub struct Tracker {
     /// while half the events identify one only by id.
     names: HashMap<i64, String>,
     focused: Option<OutputId>,
-    /// Whether any window holds the focus, which is not the same as a monitor holding it.
-    focused_window: bool,
+    /// Workspace the focused window is on, which the monitor showing it is read from.
+    focused_workspace: Option<i64>,
     /// Window address to the workspace it is on, which is what says whether a workspace is
     /// empty. `None` where nothing asks; see [`Tracker::new`].
     windows: Option<HashMap<String, i64>>,
@@ -61,7 +61,6 @@ impl Tracker {
         clients: Vec<wire::Client>,
     ) {
         self.names = workspaces.into_iter().map(|w| (w.id, w.name)).collect();
-        self.focused_window = window.address.is_some();
         if let Some(windows) = &mut self.windows {
             *windows = clients
                 .into_iter()
@@ -69,6 +68,31 @@ impl Tracker {
                 .collect();
         }
         self.resync(monitors);
+        self.focused_workspace = self.holding(&window);
+    }
+
+    /// Which workspace the focused window is on, from the answer that carries it.
+    ///
+    /// One no monitor is showing is a special workspace, drawn over whichever monitor has
+    /// the focus, and falls back to what that monitor shows as every event path does.
+    fn holding(&self, window: &wire::ActiveWindow) -> Option<i64> {
+        window.address.as_ref()?;
+        let shown = window
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.id)
+            .filter(|id| self.monitors.values().any(|shown| shown == id));
+        shown.or_else(|| self.showing())
+    }
+
+    /// What the monitor holding the focus is showing, which is where a window taking it
+    /// lands.
+    ///
+    /// [`UNSET`] answers nothing rather than a workspace: it stands for a monitor that has
+    /// not said what it shows, and every monitor waiting on that answer carries it.
+    fn showing(&self) -> Option<i64> {
+        let focused = self.focused.as_ref()?;
+        self.monitors.get(focused).copied().filter(|id| *id != UNSET)
     }
 
     /// Replaces what each monitor is showing, leaving the focused window alone.
@@ -139,7 +163,11 @@ impl Tracker {
             Event::WorkspaceCreated { id, name } | Event::WorkspaceRenamed { id, name } => {
                 self.names.insert(id, name);
             }
-            Event::ActiveWindow { focused } => self.focused_window = focused,
+            // Taken to be on what the monitor holding the focus is showing, which the
+            // compositor moves first. A monitor the cursor reaches empty reports none.
+            Event::ActiveWindow { focused } => {
+                self.focused_workspace = if focused { self.showing() } else { None };
+            }
             Event::WindowOpened { address, workspace } => {
                 // Every workspace that exists has been named: one that did not is created
                 // before anything can open on it, and the rest were named by the snapshot.
@@ -213,7 +241,7 @@ impl Tracker {
             .iter()
             .map(|(output, workspace)| {
                 let on = match settings.for_output(output).blur.when {
-                    When::Focus => focused.as_ref() == Some(output),
+                    When::Focus => focused == Some(output),
                     When::NonEmpty => self.occupied(*workspace),
                 };
                 (output, on)
@@ -242,13 +270,11 @@ impl Tracker {
         drives
     }
 
-    /// The monitor holding the focused window, which is not the monitor holding focus.
-    ///
-    /// A monitor showing an empty workspace is still the focused one, but nothing on it is
-    /// focused, and `blur.when = "focus"` follows the window rather than the monitor. The
-    /// compositor says so by reporting an active window with no address at all.
-    fn focused_output(&self) -> Option<OutputId> {
-        self.focused.clone().filter(|_| self.focused_window)
+    /// The monitor showing the workspace the focused window is on, which is not the monitor
+    /// holding the focus: the cursor moves that one alone wherever it lands.
+    fn focused_output(&self) -> Option<&OutputId> {
+        let workspace = self.focused_workspace?;
+        self.monitors.iter().find(|(_, id)| **id == workspace).map(|(output, _)| output)
     }
 
     /// Whether the workspace a monitor is showing holds any window at all.
@@ -293,7 +319,7 @@ mod tests {
         Scoped::new(Params { span: Span::Count(5), ..Params::default() })
     }
 
-    /// The same, blurring on the rule given rather than on the focus.
+    /// The same, on the blur rule given.
     fn blurring(blur: Blur) -> Scoped<Params> {
         Scoped::new(Params { span: Span::Count(5), blur, ..Params::default() })
     }
@@ -425,8 +451,31 @@ mod tests {
         feed(&mut tracker, "focusedmonv2>>eDP-1,14");
 
         let drives = tracker.drives(&settings());
-        assert_eq!(blurred(&drives), Some(output("eDP-1")));
         assert_eq!(at(&drives, "eDP-1"), 1.0);
+        assert_eq!(
+            blurred(&drives),
+            Some(output("DP-1")),
+            "the focus reached eDP-1 without any window on it doing so"
+        );
+    }
+
+    /// The cursor crossing to a monitor showing nothing moves the focus and leaves the
+    /// focused window where it is, which the compositor says by not mentioning one.
+    #[test]
+    fn a_monitor_the_cursor_reaches_holds_no_window_and_blurs_for_none() {
+        let mut tracker = seeded();
+        assert_eq!(blurred(&tracker.drives(&settings())), Some(output("DP-1")));
+
+        feed(&mut tracker, "focusedmonv2>>eDP-1,14");
+        assert_eq!(
+            blurred(&tracker.drives(&settings())),
+            Some(output("DP-1")),
+            "eDP-1 has nothing on it, so the window still holding the focus is on DP-1"
+        );
+
+        // What the compositor sends once a window there does take the focus.
+        feed(&mut tracker, "activewindowv2>>55c3da272150");
+        assert_eq!(blurred(&tracker.drives(&settings())), Some(output("eDP-1")));
     }
 
     #[test]
@@ -522,8 +571,8 @@ mod tests {
         let mut tracker = seeded();
         assert_eq!(blurred(&tracker.drives(&settings())), Some(output("DP-1")));
 
-        // The order the compositor really sends: the focus leaves every window before the
-        // monitor it is moving to is announced.
+        // Reaching it by keyboard rather than by cursor, which is the one of the two that
+        // takes the focus off the window it was on.
         feed(&mut tracker, "activewindowv2>>");
         feed(&mut tracker, "focusedmonv2>>eDP-1,14");
 
@@ -587,6 +636,25 @@ mod tests {
         assert_eq!(at(&drives, "eDP-1"), 0.0, "it landed here");
         assert_eq!(at(&drives, "DP-1"), 0.5, "and is no longer here");
         assert_eq!(blurred(&drives), Some(output("eDP-1")));
+    }
+
+    /// Cold start has no event behind it to say where the focused window is, so the answer
+    /// carries the workspace and the monitor showing it is looked up.
+    #[test]
+    fn a_cold_start_finds_the_focused_window_away_from_the_focus() {
+        let mut tracker = Tracker::default();
+        let workspaces: Vec<wire::Workspace> =
+            wire::decode(r#"[{"id":1,"name":"1"},{"id":14,"name":"5"}]"#).unwrap();
+        let window =
+            wire::decode(r#"{"address":"0x55c3da6fa460","workspace":{"id":1,"name":"1"}}"#)
+                .unwrap();
+        tracker.seed(monitors(false), workspaces, window, Vec::new());
+
+        assert_eq!(
+            blurred(&tracker.drives(&settings())),
+            Some(output("DP-1")),
+            "eDP-1 has the focus, and the window holding it is on DP-1"
+        );
     }
 
     #[test]
