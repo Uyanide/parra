@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use domain::OutputId;
 
-use super::Params;
 use super::wire::{self, Event};
+use super::{Params, Scope, When};
 use crate::backends::Scoped;
 use crate::event::Drive;
 
@@ -26,22 +26,48 @@ pub struct Tracker {
     names: HashMap<i64, String>,
     focused: Option<OutputId>,
     /// Whether any window holds the focus, which is not the same as a monitor holding it.
-    window: bool,
+    focused_window: bool,
+    /// Window address to the workspace it is on, which is what says whether a workspace is
+    /// empty. `None` where nothing asks; see [`Tracker::new`].
+    windows: Option<HashMap<String, i64>>,
 }
 
 impl Tracker {
+    /// `windows` asks for the bookkeeping `blur.when = "non-empty"` needs: a
+    /// window-to-workspace map, which the compositor reports nothing else to answer from.
+    ///
+    /// Left unasked for, none of it is kept and the snapshot behind it is never fetched.
+    pub fn new(windows: bool) -> Self {
+        Self { windows: windows.then(HashMap::new), ..Self::default() }
+    }
+
+    /// Whether this tracker answers `blur.when = "non-empty"`, which is what decides
+    /// whether the snapshot of open windows is worth asking for.
+    pub fn tracks_windows(&self) -> bool {
+        self.windows.is_some()
+    }
+
     /// Replaces everything with what the compositor says is true right now.
     ///
     /// Needed because the event stream carries changes only: it never restates the world,
     /// so there is nothing to start from until this has been asked.
+    ///
+    /// `clients` is empty where nothing asked for it, which is where nothing reads it.
     pub fn seed(
         &mut self,
         monitors: Vec<wire::Monitor>,
         workspaces: Vec<wire::Workspace>,
         window: wire::ActiveWindow,
+        clients: Vec<wire::Client>,
     ) {
         self.names = workspaces.into_iter().map(|w| (w.id, w.name)).collect();
-        self.window = window.address.is_some();
+        self.focused_window = window.address.is_some();
+        if let Some(windows) = &mut self.windows {
+            *windows = clients
+                .into_iter()
+                .map(|client| (wire::address(&client.address), client.workspace.id))
+                .collect();
+        }
         self.resync(monitors);
     }
 
@@ -113,7 +139,25 @@ impl Tracker {
             Event::WorkspaceCreated { id, name } | Event::WorkspaceRenamed { id, name } => {
                 self.names.insert(id, name);
             }
-            Event::ActiveWindow { focused } => self.window = focused,
+            Event::ActiveWindow { focused } => self.focused_window = focused,
+            Event::WindowOpened { address, workspace } => {
+                // Every workspace that exists has been named: one that did not is created
+                // before anything can open on it, and the rest were named by the snapshot.
+                let id = self.named(&workspace);
+                if let (Some(id), Some(windows)) = (id, &mut self.windows) {
+                    windows.insert(address, id);
+                }
+            }
+            Event::WindowClosed { address } => {
+                if let Some(windows) = &mut self.windows {
+                    windows.remove(&address);
+                }
+            }
+            Event::WindowMoved { address, workspace } => {
+                if let Some(windows) = &mut self.windows {
+                    windows.insert(address, workspace);
+                }
+            }
             // Deliberately nothing. Whether the workspace became the active one on the
             // monitor it landed on depends on where the focus was at the time, so the
             // backend asks what both monitors ended up showing instead of guessing.
@@ -121,8 +165,15 @@ impl Tracker {
             // The name follows the new id unless the workspace had been renamed by hand,
             // and the event says which neither way. The backend asks alongside this too,
             // so all that is left here is dropping what the old id answered to.
-            Event::WorkspaceIdChanged { from, .. } => {
+            Event::WorkspaceIdChanged { from, to } => {
                 self.names.remove(&from);
+                if let Some(windows) = &mut self.windows {
+                    for workspace in windows.values_mut() {
+                        if *workspace == from {
+                            *workspace = to;
+                        }
+                    }
+                }
             }
             Event::WorkspaceDestroyed { id } => {
                 // The replacement is activated before the one being left is destroyed, so
@@ -131,6 +182,11 @@ impl Tracker {
                 // is in fact still up.
                 if !self.monitors.values().any(|active| *active == id) {
                     self.names.remove(&id);
+                    // Ids are reused, so what was on this one has to go with it or the
+                    // next workspace to carry the number inherits an occupied look.
+                    if let Some(windows) = &mut self.windows {
+                        windows.retain(|_, workspace| *workspace != id);
+                    }
                 }
             }
         }
@@ -150,6 +206,21 @@ impl Tracker {
         let mut drives = vec![Drive::OutputsChanged { outputs }];
         let focused = self.focused_output();
 
+        // Every monitor's own answer is taken before any of them is told, because
+        // `scope = "global"` reads the whole set rather than the output it is driving.
+        let reached: BTreeMap<&OutputId, bool> = self
+            .monitors
+            .iter()
+            .map(|(output, workspace)| {
+                let on = match settings.for_output(output).blur.when {
+                    When::Focus => focused.as_ref() == Some(output),
+                    When::NonEmpty => self.occupied(*workspace),
+                };
+                (output, on)
+            })
+            .collect();
+        let anywhere = reached.values().any(|on| *on);
+
         for (output, workspace) in &self.monitors {
             let name = self.names.get(workspace).map(String::as_str);
             let from = self.previous.get(output).map(String::as_str);
@@ -160,9 +231,12 @@ impl Tracker {
                 y: params.axis(params.vertical, name, from),
             });
 
-            // Hyprland focuses one window at a time, so at most one output is blurred.
-            // Every output is told either way, so the one losing focus hears about it.
-            let blurred = focused.as_ref() == Some(output);
+            // Every output is told either way, so one that no longer qualifies hears
+            // about it.
+            let blurred = match params.blur.scope {
+                Scope::Global => anywhere,
+                Scope::Output => reached[output],
+            };
             drives.push(Drive::Blurred { output: output.clone(), on: blurred });
         }
         drives
@@ -171,10 +245,23 @@ impl Tracker {
     /// The monitor holding the focused window, which is not the monitor holding focus.
     ///
     /// A monitor showing an empty workspace is still the focused one, but nothing on it is
-    /// focused, and blur follows the window rather than the monitor. The compositor says so
-    /// by reporting an active window with no address at all.
+    /// focused, and `blur.when = "focus"` follows the window rather than the monitor. The
+    /// compositor says so by reporting an active window with no address at all.
     fn focused_output(&self) -> Option<OutputId> {
-        self.focused.clone().filter(|_| self.window)
+        self.focused.clone().filter(|_| self.focused_window)
+    }
+
+    /// Whether the workspace a monitor is showing holds any window at all.
+    ///
+    /// A special workspace drawn over it contributes none of its own, since what is read
+    /// is the workspace the monitor is showing.
+    fn occupied(&self, workspace: i64) -> bool {
+        self.windows.as_ref().is_some_and(|windows| windows.values().any(|id| *id == workspace))
+    }
+
+    /// The id a workspace name answers to, for the events that carry only the name.
+    fn named(&self, name: &str) -> Option<i64> {
+        self.names.iter().find(|(_, listed)| *listed == name).map(|(id, _)| *id)
     }
 }
 
@@ -186,8 +273,11 @@ const UNSET: i64 = 0;
 mod tests {
     use domain::Stop;
 
-    use super::super::{Axis, Span};
+    use super::super::{Blur, Span};
     use super::*;
+
+    const NON_EMPTY: Blur = Blur { when: When::NonEmpty, scope: Scope::Output };
+    const EVERYWHERE: Blur = Blur { when: When::Focus, scope: Scope::Global };
 
     fn output(name: &str) -> OutputId {
         OutputId::new(name)
@@ -201,6 +291,11 @@ mod tests {
     /// Five numbered workspaces, so the two the fixtures use sit at either end.
     fn settings() -> Scoped<Params> {
         Scoped::new(Params { span: Span::Count(5), ..Params::default() })
+    }
+
+    /// The same, blurring on the rule given rather than on the focus.
+    fn blurring(blur: Blur) -> Scoped<Params> {
+        Scoped::new(Params { span: Span::Count(5), blur, ..Params::default() })
     }
 
     fn named_settings(names: &[&str]) -> Scoped<Params> {
@@ -218,7 +313,23 @@ mod tests {
         let mut tracker = Tracker::default();
         let workspaces: Vec<wire::Workspace> =
             wire::decode(r#"[{"id":1,"name":"1"},{"id":14,"name":"5"}]"#).unwrap();
-        tracker.seed(monitors(true), workspaces, wire::decode(window).unwrap());
+        tracker.seed(monitors(true), workspaces, wire::decode(window).unwrap(), Vec::new());
+        tracker
+    }
+
+    /// The same two monitors, following the open windows `clients` names.
+    ///
+    /// DP-1 shows workspace 1 and holds the focus; eDP-1 shows workspace 14.
+    fn seeded_windows(clients: &str) -> Tracker {
+        let mut tracker = Tracker::new(true);
+        let workspaces: Vec<wire::Workspace> =
+            wire::decode(r#"[{"id":1,"name":"1"},{"id":14,"name":"5"}]"#).unwrap();
+        tracker.seed(
+            monitors(true),
+            workspaces,
+            wire::decode(r#"{"address":"0x55c3da6fa460"}"#).unwrap(),
+            wire::decode(clients).unwrap(),
+        );
         tracker
     }
 
@@ -249,6 +360,17 @@ mod tests {
             Drive::Blurred { output, on: true } => Some(output.clone()),
             _ => None,
         })
+    }
+
+    /// Every output driven to blur, in the order they were told.
+    fn all_blurred(drives: &[Drive]) -> Vec<&str> {
+        drives
+            .iter()
+            .filter_map(|drive| match drive {
+                Drive::Blurred { output, on: true } => Some(output.as_str()),
+                _ => None,
+            })
+            .collect()
     }
 
     fn at(drives: &[Drive], want: &str) -> f32 {
@@ -503,15 +625,139 @@ mod tests {
         assert_eq!(at(&tracker.drives(&sparse), "DP-1"), 1.0, "reached from 8 this time, so 5");
     }
 
+    #[test]
+    fn a_workspace_with_a_window_on_it_blurs_without_holding_the_focus() {
+        let tracker = seeded_windows(r#"[{"address":"0x1","workspace":{"id":14,"name":"5"}}]"#);
+        assert_eq!(
+            all_blurred(&tracker.drives(&blurring(NON_EMPTY))),
+            vec!["eDP-1"],
+            "DP-1 holds the focused window and shows a workspace nothing else is on"
+        );
+    }
+
+    #[test]
+    fn an_empty_workspace_stays_sharp() {
+        let tracker = seeded_windows("[]");
+        assert!(all_blurred(&tracker.drives(&blurring(NON_EMPTY))).is_empty());
+    }
+
+    #[test]
+    fn a_window_opening_and_closing_moves_the_answer() {
+        let mut tracker = seeded_windows("[]");
+        feed(&mut tracker, "openwindow>>abc,1,kitty,zsh");
+        assert_eq!(all_blurred(&tracker.drives(&blurring(NON_EMPTY))), vec!["DP-1"]);
+
+        feed(&mut tracker, "closewindow>>abc");
+        assert!(all_blurred(&tracker.drives(&blurring(NON_EMPTY))).is_empty());
+    }
+
+    #[test]
+    fn a_window_handed_to_another_workspace_takes_the_blur_with_it() {
+        let mut tracker =
+            seeded_windows(r#"[{"address":"0xabc","workspace":{"id":1,"name":"1"}}]"#);
+        assert_eq!(all_blurred(&tracker.drives(&blurring(NON_EMPTY))), vec!["DP-1"]);
+
+        feed(&mut tracker, "movewindowv2>>abc,14,5");
+        assert_eq!(all_blurred(&tracker.drives(&blurring(NON_EMPTY))), vec!["eDP-1"]);
+    }
+
+    /// A renumbered workspace is the same workspace, so what is on it is still on it.
+    #[test]
+    fn a_renumbered_workspace_keeps_its_windows() {
+        let mut tracker =
+            seeded_windows(r#"[{"address":"0xabc","workspace":{"id":1,"name":"1"}}]"#);
+        feed(&mut tracker, "changeworkspaceid>>1,7");
+
+        // What the backend asks for once the renumbering is announced.
+        let renumbered: Vec<wire::Monitor> = wire::decode(
+            r#"[{"name":"DP-1","focused":true,"activeWorkspace":{"id":7,"name":"1"}},
+                {"name":"eDP-1","focused":false,"activeWorkspace":{"id":14,"name":"5"}}]"#,
+        )
+        .unwrap();
+        tracker.resync(renumbered);
+
+        assert_eq!(all_blurred(&tracker.drives(&blurring(NON_EMPTY))), vec!["DP-1"]);
+    }
+
+    /// Hyprland reuses the numbers it hands out, so a workspace going away has to take
+    /// what was on it or the next one to carry its id looks occupied.
+    #[test]
+    fn a_destroyed_workspace_takes_its_windows_with_it() {
+        let mut tracker =
+            seeded_windows(r#"[{"address":"0xabc","workspace":{"id":3,"name":"3"}}]"#);
+        feed(&mut tracker, "closewindow>>abc");
+        feed(&mut tracker, "destroyworkspacev2>>3,3");
+
+        feed(&mut tracker, "createworkspacev2>>3,3");
+        feed(&mut tracker, "workspacev2>>3,3");
+        assert!(all_blurred(&tracker.drives(&blurring(NON_EMPTY))).is_empty());
+    }
+
+    #[test]
+    fn one_output_reaching_it_blurs_every_output() {
+        let mut tracker = seeded();
+        assert_eq!(
+            all_blurred(&tracker.drives(&blurring(EVERYWHERE))),
+            vec!["DP-1", "eDP-1"],
+            "one window is focused, and it is on DP-1"
+        );
+
+        feed(&mut tracker, "activewindowv2>>");
+        assert!(all_blurred(&tracker.drives(&blurring(EVERYWHERE))).is_empty());
+    }
+
+    #[test]
+    fn one_output_may_blur_on_a_different_rule_from_the_rest() {
+        let mut scoped = blurring(NON_EMPTY);
+        scoped.set_output(output("DP-1"), Params { span: Span::Count(5), ..Params::default() });
+
+        let mut tracker = seeded_windows(r#"[{"address":"0x1","workspace":{"id":14,"name":"5"}}]"#);
+        feed(&mut tracker, "activewindowv2>>");
+        assert_eq!(
+            all_blurred(&tracker.drives(&scoped)),
+            vec!["eDP-1"],
+            "DP-1 follows the focus, which has left every window, while eDP-1 follows its own"
+        );
+    }
+
+    /// `when` is read from the output being asked about and `scope` from the output being
+    /// driven, so what `"global"` reads can hold two rules at once.
+    #[test]
+    fn an_output_deciding_alone_still_answers_for_one_deciding_together() {
+        let alone = || Params { span: Span::Count(5), ..Params::default() };
+        let mut together = blurring(Blur { scope: Scope::Global, ..NON_EMPTY });
+        together.set_output(output("DP-1"), alone());
+
+        let tracker = seeded_windows(r#"[{"address":"0x1","workspace":{"id":1,"name":"1"}}]"#);
+        assert_eq!(
+            all_blurred(&tracker.drives(&together)),
+            vec!["DP-1", "eDP-1"],
+            "eDP-1 shows an empty workspace, and blurs on DP-1 holding the focus"
+        );
+
+        let mut apart = blurring(NON_EMPTY);
+        apart.set_output(output("DP-1"), alone());
+        assert_eq!(
+            all_blurred(&tracker.drives(&apart)),
+            vec!["DP-1"],
+            "reading only its own answer, eDP-1 hears nothing of DP-1's"
+        );
+    }
+
+    /// Nothing asking the question is what makes the snapshot behind it not worth
+    /// fetching, so the two have to agree.
+    #[test]
+    fn a_tracker_that_follows_no_windows_says_so() {
+        assert!(!Tracker::default().tracks_windows());
+        assert!(Tracker::new(true).tracks_windows());
+    }
+
     /// The span is per output like every other setting, and sharing one is what makes a
     /// monitor travel through only part of its wallpaper.
     #[test]
     fn an_output_is_placed_in_its_own_span() {
         let mut scoped = settings();
-        scoped.set_output(
-            output("eDP-1"),
-            Params { span: Span::Count(14), vertical: Axis::None, horizontal: Axis::Workspace },
-        );
+        scoped.set_output(output("eDP-1"), Params { span: Span::Count(14), ..Params::default() });
 
         let drives = seeded().drives(&scoped);
         assert_eq!(at(&drives, "DP-1"), 0.0, "workspace 1 of 5");

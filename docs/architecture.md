@@ -339,10 +339,43 @@ above exists to prevent. Fixing the fraction leaves the settled zoomed-in rect e
 where it was and makes the animation a scaling of one mapping rather than a walk across
 two, at the price of an overview that uses slightly less than the cap allows.
 
-Everything is per output. That niri blurs at most one output at a time, and zooms every
-output out together, are niri's rules rather than the boundary's: its backend states a
-value for every output on every update, and nothing downstream assumes either. Two outputs
-blurred at once is representable, because some other compositor will do it.
+Everything is per output. That niri zooms every output out together is niri's rule rather
+than the boundary's: its backend states a value for every output on every update, and
+nothing downstream assumes it. Two outputs blurred at once is representable, and the
+setting below is what asks for it.
+
+**When an output blurs is a setting, not a channel.** The channel already is the answer --
+whether this output should be blurred -- so what `[compositor] blur` changes is the question
+a backend asks before stating one. `when` picks between the output holding the focused
+window and the workspace it shows holding anything at all; `scope` picks between an output
+answering for itself and every output answering together. Both are spelled in focus and
+workspaces, which is what puts them in the backend's own section beside `span` rather than
+in the shared parameters, and `domain` learns neither word.
+
+Set per output, `when` is answered by the output it is set on and `scope` is read by the
+output reading it, which is why every output's answer is taken before any of them is driven.
+The alternative, one output's `when` asked of every other output, would let two outputs both
+set to `"global"` disagree, and agreeing is the whole of what that word promises.
+
+The two backends carry the keys separately, as they already carry `Axis`. One spelling would
+put focus and workspaces in `backends/mod.rs`, and the answers differ under it anyway: niri
+is asked what its tracker already holds, for the columns, while Hyprland has to be told.
+
+**Hyprland keeps a window map to answer an empty workspace, and only where one is asked
+for.** Its event stream reports a window opening, closing and being handed on, and never how
+many a workspace holds, so there is nothing to count without following each window from
+`j/clients` at connect. The alternative was asking `j/workspaces` when a window event
+arrives, which is a request on the event path and is what the seam below rules out.
+
+`[compositor]` is fixed for the life of a connection, so the backend reads its settings once
+and a file that never says `non-empty` neither asks for the snapshot nor keeps the map. The
+cold-start figures above hold unchanged for such a file.
+
+What the map leaves out is a special workspace drawn over the active one. `activespecial` is
+unparsed so that a scratchpad cannot pull the parallax to centre, and reading it here alone
+would leave one event followed for one purpose and not the other. The two answers a
+compositor's own vocabulary settles -- that, and niri counting a floating window, which has
+a workspace but no place in the scroll -- are in [config.md](config.md#when-an-output-blurs).
 
 Which niri position moves which axis is `[compositor]` in its own config file. Centring an
 axis is `horizontal = "none"` there, rather than a second switch in the shared parameters,

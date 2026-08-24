@@ -63,6 +63,20 @@ pub enum Event {
     ActiveWindow {
         focused: bool,
     },
+    /// A window appeared, on the workspace it names. The address is the only handle the
+    /// stream gives one, and is what the two events below are joined on.
+    WindowOpened {
+        address: String,
+        workspace: String,
+    },
+    WindowClosed {
+        address: String,
+    },
+    /// A window was handed to another workspace, which this names by id as well.
+    WindowMoved {
+        address: String,
+        workspace: i64,
+    },
 }
 
 /// An event this daemon does model, in a shape it no longer recognizes.
@@ -142,6 +156,26 @@ pub fn parse(line: &str) -> Result<Option<Event>, Malformed> {
         // An address, or nothing at all when the focus left every window. The address
         // itself is never used, so only the difference between the two is read.
         "activewindowv2" => Event::ActiveWindow { focused: !data.is_empty() },
+        // Four fields, of which the title trails and is free text. Only the leading ones
+        // can be pinned, so a workspace name carrying a comma reads short.
+        "openwindow" => Event::WindowOpened {
+            address: address(&field(data, 0, 4).ok_or(bad(FIELDS))?),
+            workspace: field(data, 1, 4).ok_or(bad(FIELDS))?,
+        },
+        // One address and nothing else, so an empty payload is the format having moved
+        // rather than a window without one.
+        "closewindow" if data.is_empty() => return Err(bad(NAME)),
+        "closewindow" => Event::WindowClosed { address: address(data) },
+        // The address leads and the id follows it, so both fields read here are pinned
+        // from the left and the free text is what is left over.
+        "movewindowv2" => {
+            let (window, rest) = data.split_once(',').ok_or(bad(FIELDS))?;
+            let (workspace, _name) = rest.split_once(',').ok_or(bad(FIELDS))?;
+            Event::WindowMoved {
+                address: address(window),
+                workspace: workspace.parse().map_err(|_| bad(ID))?,
+            }
+        }
         _ => return Ok(None),
     };
     Ok(Some(event))
@@ -155,6 +189,12 @@ const ID: &str = "an id is not a number";
 /// contain the separator itself.
 fn field(data: &str, at: usize, count: usize) -> Option<String> {
     data.splitn(count, ',').nth(at).map(str::to_owned)
+}
+
+/// One window's address, without the prefix `j/clients` writes and the event stream does
+/// not, so the two spellings of one handle compare equal.
+pub fn address(raw: &str) -> String {
+    raw.strip_prefix("0x").unwrap_or(raw).to_owned()
 }
 
 /// A leading id and everything after it, which is one free-text field.
@@ -186,6 +226,16 @@ pub struct WorkspaceRef {
 pub struct Workspace {
     pub id: i64,
     pub name: String,
+}
+
+/// What `j/clients` says, and only the fields this daemon reads.
+///
+/// Asked for only where some output blurs on whether a workspace is empty: the event stream
+/// reports a window opening and closing but never how many one workspace holds.
+#[derive(Debug, Deserialize)]
+pub struct Client {
+    pub address: String,
+    pub workspace: WorkspaceRef,
 }
 
 /// What `j/activewindow` says, which is `{}` when the focus is on no window at all.
@@ -356,6 +406,60 @@ mod tests {
     }
 
     #[test]
+    fn reads_a_window_opening_on_a_workspace() {
+        assert_eq!(
+            parse("openwindow>>55c3da272150,3,kitty,zsh").unwrap(),
+            Some(Event::WindowOpened {
+                address: "55c3da272150".to_owned(),
+                workspace: "3".to_owned(),
+            })
+        );
+
+        // The title trails and is free text, so a comma in one must not shift the
+        // workspace out from under it.
+        assert_eq!(
+            parse("openwindow>>55c3da272150,browser,firefox,one, two").unwrap(),
+            Some(Event::WindowOpened {
+                address: "55c3da272150".to_owned(),
+                workspace: "browser".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn reads_a_window_closing_and_being_handed_on() {
+        assert_eq!(
+            parse("closewindow>>55c3da272150").unwrap(),
+            Some(Event::WindowClosed { address: "55c3da272150".to_owned() })
+        );
+        assert_eq!(
+            parse("movewindowv2>>55c3da272150,3,3").unwrap(),
+            Some(Event::WindowMoved { address: "55c3da272150".to_owned(), workspace: 3 })
+        );
+
+        // A named workspace's negative id, and a name with a comma in it, in one line.
+        assert_eq!(
+            parse("movewindowv2>>55c3da272150,-1337,one, two").unwrap(),
+            Some(Event::WindowMoved { address: "55c3da272150".to_owned(), workspace: -1337 })
+        );
+    }
+
+    #[test]
+    fn a_window_address_reads_the_same_from_either_source() {
+        assert_eq!(address("0x55c3da6fa460"), "55c3da6fa460", "as `j/clients` writes it");
+        assert_eq!(address("55c3da6fa460"), "55c3da6fa460", "as the event stream writes it");
+    }
+
+    #[test]
+    fn reads_the_open_windows() {
+        let answer = r#"[{"address":"0x55c3da6fa460","class":"kitty",
+            "workspace":{"id":1,"name":"1"}}]"#;
+        let clients: Vec<Client> = decode(answer).unwrap();
+        assert_eq!(address(&clients[0].address), "55c3da6fa460");
+        assert_eq!(clients[0].workspace.id, 1);
+    }
+
+    #[test]
     fn a_line_with_no_separator_is_ignored() {
         assert!(parse("not an event at all").unwrap().is_none());
     }
@@ -369,6 +473,10 @@ mod tests {
         assert!(parse("focusedmonv2>>eDP-1").is_err());
         assert!(parse("monitoraddedv2>>2").is_err());
         assert!(parse("changeworkspaceid>>3").is_err());
+        assert!(parse("openwindow>>55c3da272150").is_err());
+        assert!(parse("closewindow>>").is_err());
+        assert!(parse("movewindowv2>>55c3da272150,3").is_err());
+        assert!(parse("movewindowv2>>55c3da272150,three,3").is_err());
     }
 
     #[test]

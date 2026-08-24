@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use domain::{OutputId, Stop};
 
 use super::wire::{Event, Window, Workspace};
-use super::{Axis, Params};
+use super::{Axis, Params, Scope, When};
 use crate::backends::Scoped;
 use crate::event::Drive;
 
@@ -103,8 +103,23 @@ impl Tracker {
     pub fn drives(&self, settings: &Scoped<Params>) -> Vec<Drive> {
         let mut drives = vec![Drive::OutputsChanged { outputs: self.outputs() }];
         let focused = self.focused_output();
+        let grouped = self.workspaces_by_output();
 
-        for (output, workspaces) in self.workspaces_by_output() {
+        // Every output's own answer is taken before any of them is told, because
+        // `scope = "global"` reads the whole set rather than the output it is driving.
+        let reached: BTreeMap<&OutputId, bool> = grouped
+            .keys()
+            .map(|output| {
+                let on = match settings.for_output(output).blur.when {
+                    When::Focus => focused.as_ref() == Some(output),
+                    When::NonEmpty => self.occupied(output),
+                };
+                (output, on)
+            })
+            .collect();
+        let anywhere = reached.values().any(|on| *on);
+
+        for (output, workspaces) in &grouped {
             let count = workspaces.len() as u32;
             let idx = workspaces
                 .iter()
@@ -112,20 +127,32 @@ impl Tracker {
                 .map_or(0, |slot| slot.idx.min(count.max(1)));
             let workspace = (idx, count);
 
-            let params = settings.for_output(&output);
-            let x = self.axis(&output, params.horizontal, workspace);
-            let y = self.axis(&output, params.vertical, workspace);
+            let params = settings.for_output(output);
+            let x = self.axis(output, params.horizontal, workspace);
+            let y = self.axis(output, params.vertical, workspace);
             drives.push(Drive::Scrolled { output: output.clone(), x, y });
 
-            // niri focuses one window at a time, so at most one output is blurred. Every
-            // output is told either way, so the one losing focus hears about it.
-            let blurred = focused.as_ref() == Some(&output);
+            // Every output is told either way, so one that no longer qualifies hears
+            // about it.
+            let blurred = match params.blur.scope {
+                Scope::Global => anywhere,
+                Scope::Output => reached[output],
+            };
             drives.push(Drive::Blurred { output: output.clone(), on: blurred });
 
             // The overview covers every output at once.
-            drives.push(Drive::ZoomedOut { output, on: self.overview });
+            drives.push(Drive::ZoomedOut { output: output.clone(), on: self.overview });
         }
         drives
+    }
+
+    /// Whether this output's active workspace holds any window at all.
+    ///
+    /// Counts floating and fullscreen windows, which have a workspace but no place in the
+    /// scroll: what is asked here is whether anything is there, not where it sits.
+    fn occupied(&self, output: &OutputId) -> bool {
+        let Some(workspace) = self.active_workspace(output) else { return false };
+        self.window_workspace.values().any(|id| *id == workspace)
     }
 
     /// Where one axis sits, given what it was configured to follow.
@@ -259,11 +286,18 @@ impl Tracker {
 
 #[cfg(test)]
 mod tests {
+    use super::super::Blur;
     use super::*;
     use crate::backends::niri::wire;
 
-    const DEFAULTS: Params = Params { vertical: Axis::Workspace, horizontal: Axis::None };
-    const BY_COLUMN: Params = Params { vertical: Axis::Workspace, horizontal: Axis::Column };
+    const FOCUS: Blur = Blur { when: When::Focus, scope: Scope::Output };
+    const NON_EMPTY: Blur = Blur { when: When::NonEmpty, scope: Scope::Output };
+    const EVERYWHERE: Blur = Blur { when: When::Focus, scope: Scope::Global };
+
+    const DEFAULTS: Params =
+        Params { vertical: Axis::Workspace, horizontal: Axis::None, blur: FOCUS };
+    const BY_COLUMN: Params =
+        Params { vertical: Axis::Workspace, horizontal: Axis::Column, blur: FOCUS };
 
     /// The same settings for every output, which is what a file with no per-output table
     /// resolves to.
@@ -444,7 +478,7 @@ mod tests {
         let mut tracker = populated();
         columns_with_gaps(&mut tracker);
         feed(&mut tracker, r#"{"WindowFocusChanged":{"id":9}}"#);
-        let swapped = Params { vertical: Axis::Column, horizontal: Axis::Workspace };
+        let swapped = Params { vertical: Axis::Column, horizontal: Axis::Workspace, blur: FOCUS };
 
         let drives = tracker.drives(&everywhere(swapped));
         assert_eq!(vertical_of(&drives, "DP-1"), 1.0, "the last of three columns");
@@ -514,6 +548,119 @@ mod tests {
                 {"id":99,"workspace_id":null,"is_focused":true,"layout":{}}}}"#,
         );
         assert!(blurred(&tracker.drives(&everywhere(DEFAULTS))).is_empty());
+    }
+
+    /// The names printed by [`When`] and [`Scope`] are the ones a file is written with, for
+    /// the same reason [`Axis`]'s are.
+    #[test]
+    fn every_blur_setting_prints_the_name_serde_reads() {
+        for when in [When::Focus, When::NonEmpty] {
+            let json = format!(r#"{{"blur":{{"when":"{when}"}}}}"#);
+            let params: Params = serde_json::from_str(&json).expect("its own name should parse");
+            assert_eq!(params.blur.when, when);
+        }
+        for scope in [Scope::Global, Scope::Output] {
+            let json = format!(r#"{{"blur":{{"scope":"{scope}"}}}}"#);
+            let params: Params = serde_json::from_str(&json).expect("its own name should parse");
+            assert_eq!(params.blur.scope, scope);
+        }
+    }
+
+    #[test]
+    fn a_workspace_with_a_window_on_it_blurs_without_holding_the_focus() {
+        let params = Params { blur: NON_EMPTY, ..DEFAULTS };
+        assert_eq!(
+            blurred(&populated().drives(&everywhere(params))),
+            vec!["DP-1", "eDP-1"],
+            "both active workspaces hold a window, and only one of them the focus"
+        );
+    }
+
+    #[test]
+    fn an_empty_active_workspace_stays_sharp() {
+        let mut tracker = populated();
+        feed(&mut tracker, r#"{"WindowsChanged":{"windows":[]}}"#);
+        let params = Params { blur: NON_EMPTY, ..DEFAULTS };
+        assert!(blurred(&tracker.drives(&everywhere(params))).is_empty());
+    }
+
+    /// A floating or fullscreen window has no place in the scroll, which is a statement
+    /// about where it sits rather than about whether it is there.
+    #[test]
+    fn a_window_with_no_column_still_fills_a_workspace() {
+        let mut tracker = populated();
+        feed(&mut tracker, r#"{"WorkspaceActivated":{"id":5,"focused":true}}"#);
+        let params = Params { blur: NON_EMPTY, ..DEFAULTS };
+        assert_eq!(
+            blurred(&tracker.drives(&everywhere(params))),
+            vec!["eDP-1"],
+            "DP-1 moved to a workspace nothing is on"
+        );
+
+        feed(
+            &mut tracker,
+            r#"{"WindowOpenedOrChanged":{"window":
+                {"id":77,"workspace_id":5,"is_focused":false,"layout":{}}}}"#,
+        );
+        assert_eq!(blurred(&tracker.drives(&everywhere(params))), vec!["DP-1", "eDP-1"]);
+    }
+
+    #[test]
+    fn one_output_reaching_it_blurs_every_output() {
+        let params = Params { blur: EVERYWHERE, ..DEFAULTS };
+        let mut tracker = populated();
+        assert_eq!(
+            blurred(&tracker.drives(&everywhere(params))),
+            vec!["DP-1", "eDP-1"],
+            "one window is focused, and it is on DP-1"
+        );
+
+        feed(&mut tracker, r#"{"WindowFocusChanged":{"id":null}}"#);
+        assert!(blurred(&tracker.drives(&everywhere(params))).is_empty());
+    }
+
+    #[test]
+    fn one_output_may_blur_on_a_different_rule_from_the_rest() {
+        let mut settings = everywhere(Params { blur: NON_EMPTY, ..DEFAULTS });
+        settings.set_output(OutputId::new("DP-1"), DEFAULTS);
+
+        let mut tracker = populated();
+        feed(&mut tracker, r#"{"WindowFocusChanged":{"id":3}}"#);
+        assert_eq!(
+            blurred(&tracker.drives(&settings)),
+            vec!["eDP-1"],
+            "DP-1 follows the focus, which has left it, while eDP-1 follows its windows"
+        );
+    }
+
+    /// `when` is read from the output being asked about and `scope` from the output being
+    /// driven, so what `"global"` reads can hold two rules at once.
+    #[test]
+    fn an_output_deciding_alone_still_answers_for_one_deciding_together() {
+        let together = Blur { scope: Scope::Global, ..NON_EMPTY };
+        let mut settings = everywhere(Params { blur: together, ..DEFAULTS });
+        settings.set_output(OutputId::new("DP-1"), DEFAULTS);
+
+        let mut tracker = populated();
+        feed(
+            &mut tracker,
+            r#"{"WindowsChanged":{"windows":[
+                {"id":4,"workspace_id":1,"is_focused":true,
+                 "layout":{"pos_in_scrolling_layout":[1,1]}}]}}"#,
+        );
+        assert_eq!(
+            blurred(&tracker.drives(&settings)),
+            vec!["DP-1", "eDP-1"],
+            "eDP-1 shows an empty workspace, and blurs on DP-1 holding the focus"
+        );
+
+        let mut alone = everywhere(Params { blur: NON_EMPTY, ..DEFAULTS });
+        alone.set_output(OutputId::new("DP-1"), DEFAULTS);
+        assert_eq!(
+            blurred(&tracker.drives(&alone)),
+            vec!["DP-1"],
+            "reading only its own answer, eDP-1 hears nothing of DP-1's"
+        );
     }
 
     #[test]

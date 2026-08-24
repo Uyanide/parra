@@ -265,7 +265,7 @@ sits behind. Two of Hyprland's have a counterpart here:
 | Hyprland node | parra section                                | Drives                  |
 | ------------- | -------------------------------------------- | ----------------------- |
 | `workspaces`  | `[scroll.horizontal]` or `[scroll.vertical]` | Parallax                |
-| `fadeSwitch`  | `[blur]`                                     | Focus blur              |
+| `fadeSwitch`  | `[blur]`                                     | Blur                    |
 | none          | `[zoom]`                                     | Zoom, which never moves |
 
 Hyprland measures `speed` in deciseconds, so a duration in milliseconds is `speed * 100`
@@ -309,8 +309,11 @@ Two of parra's effects have nothing to drive them here, and neither goes unsaid:
 
 Blur follows the focused window rather than the focused monitor, so a monitor showing an
 empty workspace stays sharp. A launcher or other layer surface taking the keyboard leaves no
-window focused either; ask over the control socket if you want the wallpaper blurred while
-one is up, as [the blur signal](#the-blur-signal) describes.
+window focused either. Both are what `[compositor] blur` answers:
+`when = "non-empty"` blurs a monitor whose workspace holds windows regardless of the focus,
+and `scope = "global"` blurs every monitor together. See
+[config.md](config.md#when-an-output-blurs), or ask over the control socket as
+[the blur signal](#the-blur-signal) describes.
 
 #### Start it at login
 
@@ -563,7 +566,10 @@ parra blur on --output DP-1
 parra blur off --output DP-1
 ```
 
-_'output blurs'_ = _'the focused window is on this output'_ **OR** _'blur signal is set for this output'_
+_'output blurs'_ = _'the compositor drives this output to blur'_ **OR** _'blur signal is set for this output'_
+
+What the compositor drives it on is [`[compositor] blur`](config.md#when-an-output-blurs),
+which by default is the output holding the focused window.
 
 Command syntax and exit codes are in [cli.md](cli.md). The full protocol, every request
 and response, is in [control-protocol.md](control-protocol.md).

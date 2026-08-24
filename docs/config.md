@@ -70,14 +70,16 @@ shown.
 ### `[compositor]`
 
 The one section whose keys differ between compositors. Under both it says which position
-moves each parallax axis, and under Hyprland also what that axis travels through.
+moves each parallax axis and when an output blurs, and under Hyprland also what that axis
+travels through.
 
 #### Under niri
 
-| Key          | Default       | Meaning                                                     |
-| ------------ | ------------- | ----------------------------------------------------------- |
-| `vertical`   | `"workspace"` | `"workspace"`, `"column"` or `"none"`.                      |
-| `horizontal` | `"none"`      | Same values. `"none"` leaves the axis pinned to its centre. |
+| Key          | Default                              | Meaning                                                                    |
+| ------------ | ------------------------------------ | -------------------------------------------------------------------------- |
+| `vertical`   | `"workspace"`                        | `"workspace"`, `"column"` or `"none"`.                                     |
+| `horizontal` | `"none"`                             | Same values. `"none"` leaves the axis pinned to its centre.                |
+| `blur`       | `{ when = "focus", scope = "output" }` | When an output blurs. See [When an output blurs](#when-an-output-blurs). |
 
 ```toml
 [compositor]
@@ -93,11 +95,12 @@ monitor whose focused window is floating or fullscreen.
 
 #### Under Hyprland
 
-| Key          | Default       | Meaning                                                      |
-| ------------ | ------------- | ------------------------------------------------------------ |
-| `vertical`   | `"none"`      | `"workspace"` or `"none"`.                                   |
-| `horizontal` | `"workspace"` | Same values. `"none"` leaves the axis pinned to its centre.  |
-| `span`       | `10`          | The workspaces the travel covers. See [The span](#the-span). |
+| Key          | Default                                | Meaning                                                                    |
+| ------------ | -------------------------------------- | -------------------------------------------------------------------------- |
+| `vertical`   | `"none"`                               | `"workspace"` or `"none"`.                                                 |
+| `horizontal` | `"workspace"`                          | Same values. `"none"` leaves the axis pinned to its centre.                |
+| `span`       | `10`                                   | The workspaces the travel covers. See [The span](#the-span).               |
+| `blur`       | `{ when = "focus", scope = "output" }` | When an output blurs. See [When an output blurs](#when-an-output-blurs). |
 
 ```toml
 [compositor]
@@ -110,6 +113,42 @@ Sideways by default, because that is the way Hyprland moves a workspace switch. 
 no `"column"`: Hyprland's layouts report no position within a workspace, so a second axis
 would have nothing to follow that the first does not already.
 
+#### When an output blurs
+
+`blur` is written the same way under either compositor, and takes two keys:
+
+| Key     | Default    | Meaning                                                                                |
+| ------- | ---------- | -------------------------------------------------------------------------------------- |
+| `when`  | `"focus"`  | `"focus"`: the output holds the focused window. `"non-empty"`: the workspace it is showing holds at least one window, whether or not one is focused. |
+| `scope` | `"output"` | `"output"`: each output answers for itself. `"global"`: every output blurs as soon as one of them answers yes. |
+
+```toml
+[compositor]
+blur = { when = "non-empty", scope = "global" }
+```
+
+`"non-empty"` is what keeps a monitor blurred while the focus is somewhere else: on another
+monitor, or on a launcher or other layer surface, which leaves no window focused at all.
+An empty workspace is sharp either way.
+
+Which windows count depends on the compositor only where the two differ in what they have.
+Under niri a floating or fullscreen window counts, having a workspace but no place in the
+scroll. Under Hyprland a special workspace drawn over the active one counts for nothing:
+what is read is the workspace the monitor is showing, which a scratchpad does not replace.
+
+`scope` reads what every output reached, so `"global"` blurs a second monitor that has
+nothing on it because the first one qualifies.
+
+Either key can be set per monitor, and each is read from the monitor it is set on: `when` is
+the question that monitor answers, `scope` is how widely it reads the answers. A monitor set
+to `"output"` still contributes its answer to what the others read, so one set to `"global"`
+can blur because of it, and where two monitors answer different `when`s, `"global"` blurs on
+either of them reaching its own.
+
+`[blur]` below says what a blur looks like and how long it takes to arrive; this says when
+one happens. The external signal is a third thing again, ORed with both; see
+[usage.md](usage.md#the-blur-signal).
+
 #### Override per monitor
 
 One monitor can differ, on either compositor:
@@ -117,10 +156,15 @@ One monitor can differ, on either compositor:
 ```toml
 [compositor]
 horizontal = "column"
+blur = { when = "non-empty", scope = "output" }
 
 [output."eDP-1".compositor]
-horizontal = "none"   # vertical stays "workspace"
+horizontal = "none"          # vertical stays "workspace"
+blur = { when = "focus" }    # scope stays "output"
 ```
+
+An object is merged key by key like any other part of the file, so an override names only
+what it changes.
 
 This section takes effect on the next start; see [Reloading](#reloading).
 `scroll.<axis>.travel` changes how far an axis moves while the daemon runs, `0` included.
@@ -319,9 +363,10 @@ A compositor that pans the wallpaper continuously has no adjacent stop to measur
 | `duration-ms`  | `300`            |                                                                                                     |
 | `easing`       | `"in-out-cubic"` | See [easing functions](#easing-functions).                                                          |
 
-An output blurs when the compositor drives it to, which under niri and Hyprland alike means
-it holds the focused window, or when the control socket has asked for it; see
-[usage.md](usage.md#the-blur-signal). Nothing focused anywhere leaves every output sharp.
+An output blurs when the compositor drives it to, or when the control socket has asked for
+it; see [usage.md](usage.md#the-blur-signal). What the compositor drives it on is
+[`[compositor] blur`](#when-an-output-blurs), which by default is the output holding the
+focused window, so nothing focused anywhere leaves every output sharp.
 
 `radius` is measured in texels of the wallpaper texture, which is decoded at the buffer
 size times the deepest zoom. At rest one texel is one device pixel, so the configured

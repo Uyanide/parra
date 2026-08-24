@@ -35,6 +35,16 @@ layer = "background"
 vertical = "workspace"
 horizontal = "none"
 
+# When an output blurs, and whether the outputs decide it one by one or together.
+#
+#   when   "focus"      it holds the focused window
+#          "non-empty"  its active workspace holds any window, focused or not
+#   scope  "output"     each output answers for itself
+#          "global"     every output blurs as soon as one of them answers yes
+#
+# What a blur looks like is `[blur]` below; this is when one happens.
+blur = { when = "focus", scope = "output" }
+
 # One monitor can differ, inheriting whatever it leaves out:
 #
 # [output."eDP-1".compositor]

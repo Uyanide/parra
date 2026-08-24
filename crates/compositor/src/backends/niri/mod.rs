@@ -22,12 +22,13 @@ const SOCKET_VARIABLE: &str = "NIRI_SOCKET";
 const FIRST_RETRY: Duration = Duration::from_millis(250);
 const LONGEST_RETRY: Duration = Duration::from_secs(10);
 
-/// Which of niri's positions each parallax axis follows.
+/// Which of niri's positions each parallax axis follows, and when an output blurs.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Params {
     pub vertical: Axis,
     pub horizontal: Axis,
+    pub blur: Blur,
 }
 
 impl Default for Params {
@@ -36,7 +37,7 @@ impl Default for Params {
     /// The horizontal one stays off until it is asked for, since a scrolling layout with
     /// a single column has nowhere to travel.
     fn default() -> Self {
-        Self { vertical: Axis::Workspace, horizontal: Axis::None }
+        Self { vertical: Axis::Workspace, horizontal: Axis::None, blur: Blur::DEFAULT }
     }
 }
 
@@ -53,9 +54,54 @@ pub enum Axis {
     None,
 }
 
+/// When an output blurs, and whether the outputs decide it one by one or together.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Blur {
+    pub when: When,
+    pub scope: Scope,
+}
+
+impl Blur {
+    /// What the daemon drove before either key existed.
+    const DEFAULT: Self = Self { when: When::Focus, scope: Scope::Output };
+}
+
+impl Default for Blur {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// What an output has to reach to be blurred.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum When {
+    /// It holds the focused window.
+    #[default]
+    Focus,
+    /// Its active workspace holds at least one window, whether or not one is focused.
+    NonEmpty,
+}
+
+/// Whose answer to [`When`] an output reads.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum Scope {
+    /// Every output blurs as soon as one of them reaches it.
+    Global,
+    /// Each output answers for itself.
+    #[default]
+    Output,
+}
+
 impl fmt::Display for Params {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "vertical={},horizontal={}", self.vertical, self.horizontal)
+        write!(
+            f,
+            "vertical={},horizontal={},blur.when={},blur.scope={}",
+            self.vertical, self.horizontal, self.blur.when, self.blur.scope
+        )
     }
 }
 
@@ -71,6 +117,38 @@ impl Axis {
 }
 
 impl fmt::Display for Axis {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl When {
+    /// The spelling a configuration file uses, which is what serde reads.
+    const fn as_str(self) -> &'static str {
+        match self {
+            When::Focus => "focus",
+            When::NonEmpty => "non-empty",
+        }
+    }
+}
+
+impl fmt::Display for When {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Scope {
+    /// The spelling a configuration file uses, which is what serde reads.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Scope::Global => "global",
+            Scope::Output => "output",
+        }
+    }
+}
+
+impl fmt::Display for Scope {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }

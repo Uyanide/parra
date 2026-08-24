@@ -47,6 +47,15 @@ impl<P> Scoped<P> {
         self.per_output.get(id).unwrap_or(&self.global)
     }
 
+    /// Every setting in play: the global one, and each output that says something of its
+    /// own.
+    ///
+    /// The whole set whatever outputs turn up, since an output with nothing of its own
+    /// reads the global settings. For a backend deciding at connect what it has to follow.
+    pub(crate) fn all(&self) -> impl Iterator<Item = &P> {
+        std::iter::once(&self.global).chain(self.per_output.values())
+    }
+
     pub(crate) fn set_output(&mut self, id: OutputId, params: P) {
         self.per_output.insert(id, params);
     }
@@ -267,5 +276,55 @@ mod tests {
     #[test]
     fn hyprland_has_no_column_to_follow() {
         assert!(parse(hyprland::NAME, r#"{"horizontal":"column"}"#).is_err());
+    }
+
+    /// When an output blurs is asked the same way of every backend, even though each
+    /// answers it from a vocabulary of its own.
+    #[test]
+    fn every_backend_reads_the_same_blur_key() {
+        for backend in AVAILABLE {
+            let written = r#"{"blur":{"when":"non-empty","scope":"global"}}"#;
+            assert!(parse(backend, written).is_ok(), "{backend} should read {written}");
+        }
+    }
+
+    #[test]
+    fn an_unknown_key_inside_blur_names_itself() {
+        let error = parse(niri::NAME, r#"{"blur":{"wen":"focus"}}"#).unwrap_err();
+        assert!(error.to_string().contains("wen"), "{error}");
+    }
+
+    #[test]
+    fn an_output_may_blur_on_a_rule_of_its_own() {
+        let mut settings = parse(niri::NAME, r#"{"blur":{"scope":"global"}}"#).unwrap();
+        settings
+            .deserialize_output(
+                OutputId::new("DP-1"),
+                // Laid over the global section by the caller, which is why the scope it
+                // did not change is here as well.
+                &mut serde_json::Deserializer::from_str(
+                    r#"{"blur":{"when":"non-empty","scope":"global"}}"#,
+                ),
+            )
+            .unwrap();
+
+        assert_eq!(niri_params(&settings, "DP-1").blur.when, niri::When::NonEmpty);
+        assert_eq!(niri_params(&settings, "eDP-1").blur.when, niri::When::Focus);
+        assert_eq!(niri_params(&settings, "eDP-1").blur.scope, niri::Scope::Global);
+    }
+
+    /// What a backend reads to decide at connect what it has to follow, so an output
+    /// configured apart must not be missed and the global settings must not be either.
+    #[test]
+    fn every_setting_in_play_includes_the_global_one() {
+        let mut scoped = Scoped::new(niri::Params::default());
+        assert_eq!(scoped.all().count(), 1);
+
+        let asks = niri::Params {
+            blur: niri::Blur { when: niri::When::NonEmpty, ..niri::Blur::default() },
+            ..niri::Params::default()
+        };
+        scoped.set_output(OutputId::new("DP-1"), asks);
+        assert_eq!(scoped.all().filter(|p| p.blur.when == niri::When::NonEmpty).count(), 1);
     }
 }
