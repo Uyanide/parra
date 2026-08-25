@@ -201,8 +201,7 @@ with no alpha channel did not move.
 output with nothing on it used to snap: a crossfade weighs two images against each other
 and an arrival has one. Carrying alpha through the render path gave the other answer a
 single image has, which is to fade up out of whatever the compositor draws below. What that
-is depends on the setup rather than on anything here; [usage.md](usage.md#transparent-wallpapers)
-says which.
+is depends on the setup rather than on anything here.
 
 The frame's opacity is a second animated value beside the crossfade weight, not the same
 one reused. Reusing it looks free until a `parra set` lands part-way through an arrival,
@@ -403,7 +402,7 @@ knowledge of direction at all.
 The axes are configured apart because the compositor animates them apart, and one shared
 curve could only ever match one of the two. Which niri animation each pairs with is in
 [usage.md](usage.md#match-animations), and which Hyprland one in
-[usage.md](usage.md#match-hyprlands-animations).
+[usage.md](usage.md#match-animations-1).
 
 **A compositor with no position to report declares one instead.** Hyprland only names its
 workspaces: they are global rather than per monitor, and it creates and destroys them as

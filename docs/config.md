@@ -1,31 +1,55 @@
 # Configuration
 
-One file per compositor, and exactly one is read per run. The daemon detects which
-compositor it is under and reads `$XDG_CONFIG_HOME/parra/<compositor>.toml`, falling back
-to `$HOME/.config/parra/`. Under niri that is `niri.toml`, and under Hyprland
-`hyprland.toml` -- named after the backend, in lower case, and not after
-`$XDG_CURRENT_DESKTOP`, which Hyprland sets to `Hyprland`. `--config PATH` overrides the
-location.
+- [Configuration](#configuration)
+  - [Which file](#which-file)
+  - [Inheritance](#inheritance)
+  - [Keys](#keys)
+    - [`[general]`](#general)
+    - [`[wallpaper]`](#wallpaper)
+    - [`[compositor]`](#compositor)
+      - [Under niri](#under-niri)
+      - [Under Hyprland](#under-hyprland)
+      - [The span](#the-span)
+        - [Syntax](#syntax)
+        - [One span per monitor](#one-span-per-monitor)
+        - [Where an unlisted workspace lands](#where-an-unlisted-workspace-lands)
+      - [When an output blurs](#when-an-output-blurs)
+      - [Override per monitor](#override-per-monitor)
+    - [`[scroll.vertical]` and `[scroll.horizontal]`](#scrollvertical-and-scrollhorizontal)
+      - [Running an axis the other way](#running-an-axis-the-other-way)
+      - [A maximum shift](#a-maximum-shift)
+    - [`[blur]`](#blur)
+    - [`[zoom]`](#zoom)
+    - [`[transition]`](#transition)
+  - [Reloading](#reloading)
+  - [Easing functions](#easing-functions)
+  - [Errors](#errors)
+  - [What is not configurable](#what-is-not-configurable)
+
+## Which file
+
+The daemon detects which compositor it is under and reads
+`$XDG_CONFIG_HOME/parra/<compositor>.toml`, falling back to `$HOME/.config/parra/`:
+
+- under niri: `niri.toml`
+- under Hyprland: `hyprland.toml`
+
+`--config PATH` overrides the location.
 
 A missing file is a working configuration: every key has a built-in default, and
 [niri.example.toml](../examples/niri.example.toml) and
 [hyprland.example.toml](../examples/hyprland.example.toml) list them all.
 
-Nothing is shared between two compositors' files. Anyone running two writes their
-wallpaper, blur and transition settings in each, and there is no include mechanism.
-
-Validate a file without starting anything, on any machine:
-
-```sh
-parra daemon --check --backend niri --config ./niri.toml
-```
+_Nothing_ is shared between compositors' files, every key in each file is configured
+separately and can hold different values. Besides, there is _no_ include mechanism.
 
 ## Inheritance
 
 Global sections set the value for every output. A `[output."<connector>"]` table overrides
-individual keys for one monitor, and anything it leaves out is inherited. Connector names
-are matched exactly as the compositor reports them, `DP-1` and `eDP-1` being the usual
-shapes.
+individual keys for one monitor, and anything it leaves out is inherited.
+
+Connector names are matched exactly as the compositor reports them, `DP-1`, `eDP-1`, `HDMI-A-1`
+being the usual shapes.
 
 ```toml
 [blur]
@@ -36,12 +60,13 @@ downscale = 2
 blur.radius = 16   # downscale stays 2
 ```
 
-`[output."<connector>".compositor]` overrides the file's own `[compositor]` section key by
-key, on the same rule.
-
 ## Keys
 
 ### `[general]`
+
+> [!IMPORTANT]
+>
+> This section takes effect on the next start; see [Reloading](#reloading).
 
 Applies to every output; there is no per-output form.
 
@@ -49,8 +74,6 @@ Applies to every output; there is no per-output form.
 | ----------- | ------------------ | ------------------------------------------------------------- |
 | `namespace` | the program's name | Layer-shell namespace, for compositor rules that match on it. |
 | `layer`     | `"background"`     | `"background"` or `"bottom"`.                                 |
-
-Both take effect on the next start; see [Reloading](#reloading).
 
 ### `[wallpaper]`
 
@@ -69,22 +92,27 @@ shown.
 
 ### `[compositor]`
 
+> [!IMPORTANT]
+>
+> This section takes effect on the next start; see [Reloading](#reloading).
+
 The one section whose keys differ between compositors. Under both it says which position
 moves each parallax axis and when an output blurs, and under Hyprland also what that axis
 travels through.
 
 #### Under niri
 
-| Key          | Default                              | Meaning                                                                    |
-| ------------ | ------------------------------------ | -------------------------------------------------------------------------- |
-| `vertical`   | `"workspace"`                        | `"workspace"`, `"column"` or `"none"`.                                     |
-| `horizontal` | `"none"`                             | Same values. `"none"` leaves the axis pinned to its centre.                |
+| Key          | Default                                                        | Meaning                                                                  |
+| ------------ | -------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `vertical`   | `"workspace"`                                                  | `"workspace"`, `"column"` or `"none"`.                                   |
+| `horizontal` | `"none"`                                                       | Same values. `"none"` leaves the axis pinned to its centre.              |
 | `blur`       | `{ when = "non-empty", scope = "output", overview = "clear" }` | When an output blurs. See [When an output blurs](#when-an-output-blurs). |
 
 ```toml
 [compositor]
 vertical = "workspace"
-horizontal = "column"   # turn on horizontal parallax
+horizontal = "none"
+blur = { when = "non-empty", scope = "output", overview = "clear" }
 ```
 
 `"workspace"` follows the active workspace among that output's own workspaces; `"column"`
@@ -95,11 +123,11 @@ monitor whose focused window is floating or fullscreen.
 
 #### Under Hyprland
 
-| Key          | Default                                | Meaning                                                                    |
-| ------------ | -------------------------------------- | -------------------------------------------------------------------------- |
-| `vertical`   | `"none"`                               | `"workspace"` or `"none"`.                                                 |
-| `horizontal` | `"workspace"`                          | Same values. `"none"` leaves the axis pinned to its centre.                |
-| `span`       | `10`                                   | The workspaces the travel covers. See [The span](#the-span).               |
+| Key          | Default                                    | Meaning                                                                  |
+| ------------ | ------------------------------------------ | ------------------------------------------------------------------------ |
+| `vertical`   | `"none"`                                   | `"workspace"` or `"none"`.                                               |
+| `horizontal` | `"workspace"`                              | Same values. `"none"` leaves the axis pinned to its centre.              |
+| `span`       | `10`                                       | The workspaces the travel covers. See [The span](#the-span).             |
 | `blur`       | `{ when = "non-empty", scope = "output" }` | When an output blurs. See [When an output blurs](#when-an-output-blurs). |
 
 ```toml
@@ -107,91 +135,16 @@ monitor whose focused window is floating or fullscreen.
 vertical = "none"
 horizontal = "workspace"
 span = 10
-```
-
-Sideways by default, because that is the way Hyprland moves a workspace switch. There is
-no `"column"`: Hyprland's layouts report no position within a workspace, so a second axis
-would have nothing to follow that the first does not already.
-
-#### When an output blurs
-
-`when` and `scope` are written the same way under either compositor:
-
-| Key     | Default    | Meaning                                                                                |
-| ------- | ---------- | -------------------------------------------------------------------------------------- |
-| `when`  | `"non-empty"` | `"focused"`: the output holds the focused window. `"non-empty"`: the workspace it is showing holds at least one window, whether or not one is focused. |
-| `scope` | `"output"` | `"output"`: each output answers for itself. `"global"`: every output blurs as soon as one of them answers yes. |
-
-```toml
-[compositor]
-blur = { when = "non-empty", scope = "global" }
-```
-
-`"non-empty"` is what keeps a monitor blurred while the focus is somewhere else: on another
-monitor, or on a launcher or other layer surface, which leaves no window focused at all.
-An empty workspace is sharp either way.
-
-Which windows count depends on the compositor only where the two differ in what they have.
-Under niri a floating or fullscreen window counts, having a workspace but no place in the
-scroll. Under Hyprland a special workspace drawn over the active one counts for nothing:
-what is read is the workspace the monitor is showing, which a scratchpad does not replace.
-
-`scope` reads what every output reached, so `"global"` blurs a second monitor that has
-nothing on it because the first one qualifies.
-
-Niri also takes an `overview` key, which Hyprland's `blur` does not:
-
-| Key        | Default    | Meaning                                                                          |
-| ---------- | ---------- | --------------------------------------------------------------------------------- |
-| `overview` | `"clear"` | `"clear"`: sharp for as long as the overview is open. `"blur"`: blurred for as long as it is open. `"follow"`: the overview does not change what `when` and `scope` decided. |
-
-```toml
-[compositor]
-blur = { when = "non-empty", scope = "output", overview = "blur" }
-```
-
-It reaches every output at once, the same state that drives [`[zoom]`](#zoom) back out to
-the whole image.
-
-Either of `when` and `scope` can be set per monitor, and each is read from the monitor it is
-set on: `when` is the question that monitor answers, `scope` is how widely it reads the
-answers. A monitor set to `"output"` still contributes its answer to what the others read,
-so one set to `"global"` can blur because of it, and where two monitors answer different
-`when`s, `"global"` blurs on either of them reaching its own. `overview` reads the same
-state on every monitor, so setting it on one alone changes nothing by itself; it takes
-effect paired with a `when`/`scope` override on that same monitor.
-
-`[blur]` below says what a blur looks like and how long it takes to arrive; this says when
-one happens. The external signal is a third thing again, ORed with both; see
-[usage.md](usage.md#the-blur-signal).
-
-#### Override per monitor
-
-One monitor can differ, on either compositor:
-
-```toml
-[compositor]
-horizontal = "column"
 blur = { when = "non-empty", scope = "output" }
-
-[output."eDP-1".compositor]
-horizontal = "none"          # vertical stays "workspace"
-blur = { when = "focused" }  # scope stays "output"
 ```
-
-An object is merged key by key like any other part of the file, so an override names only
-what it changes.
-
-This section takes effect on the next start; see [Reloading](#reloading).
-`scroll.<axis>.travel` changes how far an axis moves while the daemon runs, `0` included.
 
 #### The span
 
-Hyprland only names its workspaces. They are global rather than per monitor, and it creates
-and destroys them as they are used, so there is no position it can report and no live count
-worth reading: counting the workspaces that happen to exist would change the length of the
-travel whenever one appeared or went away, moving the wallpaper with no user action behind
-it. `span` declares the travel instead.
+Hyprland only names its workspaces. They are global rather than per monitor, carry no
+order, and are created and destroyed as they are used. So there is no position it can
+report. `span` declares the travel instead.
+
+##### Syntax
 
 A number is shorthand for the workspaces named `"1"` through `"N"`:
 
@@ -205,7 +158,7 @@ carrying names need:
 
 ```toml
 [compositor]
-span = ["browser", "code", "mail"]
+span = ["browser", "code", "mail", "3-6", "10"]
 ```
 
 An entry written `"3-6"` is the range `"3"` to `"6"`, both ends included, and expands where
@@ -213,12 +166,15 @@ it stands. Written backwards it counts down, so `["9-7", "mail"]` travels `"9"`,
 `"7"`, `"mail"`. A hyphen anywhere but between digits belongs to a name, which leaves
 `"my-project"` and `"-1"` single workspaces.
 
-The order is the list's own, not the names sorted: `["3", "1", "5"]` puts `"1"` in the
-middle. It sets where each stop sits and nothing else, which is why the placement rules
-below go by number.
+Workspaces are visited in the order they are listed, not in the sorted order:
+`["3", "1", "5"]` puts `"1"` in the middle. That written order fixes only where each stop
+sits; how an unlisted one is placed is in
+[Where an unlisted workspace lands](#where-an-unlisted-workspace-lands).
 
 No workspace may be listed twice, counting `"1"` and `"01"` as the same one, and a span
 covers at most 1000 of them.
+
+##### One span per monitor
 
 It is per output like everything else. Hyprland numbers workspaces across every monitor
 rather than restarting on each, so a second monitor shows only part of the range and
@@ -232,7 +188,7 @@ span = 5                       # everywhere, unless said otherwise below
 span = ["6", "7", "8"]         # the three this one actually shows
 ```
 
-A count is shorthand for `"1"` through `"N"` and nothing else, so `span = 3` there would
+A count is shorthand for `"1"` through `"N"`, so `span = 3` there would
 mean the workspaces `"1"`, `"2"` and `"3"`. It does not mean "three workspaces on this
 monitor". Anything else has to be named.
 
@@ -245,6 +201,8 @@ travel and even steps between them.
 Two monitors may name the same workspace, which is allowed and often right: Hyprland can
 put it on either. Only the monitor actually showing it ever matches, so the two cannot
 disagree.
+
+##### Where an unlisted workspace lands
 
 A workspace the span does not list still has to land somewhere. Where every entry in the
 span is a number it lands on the nearest of them by number, which also clamps anything past
@@ -266,11 +224,61 @@ Where the span carries names there is no distance to measure, so an unlisted wor
 centred instead. Centre is a position like any other: with `["2", "4", "6"]` it is exactly
 where `"4"` sits. A workspace whose name is not a number sits centred either way.
 
+#### When an output blurs
+
+`when` and `scope` are written the same way under either compositor:
+
+| Key     | Default       | Meaning                                                                                                                                                |
+| ------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `when`  | `"non-empty"` | `"focused"`: the output holds the focused window. `"non-empty"`: the workspace it is showing holds at least one window, whether or not one is focused. |
+| `scope` | `"output"`    | `"output"`: each output answers for itself. `"global"`: every output blurs as soon as one of them answers yes.                                         |
+
+```toml
+[compositor.blur]
+when = "non-empty"
+scope = "output"
+```
+
+Either of `when` and `scope` can be set per monitor, and each is read from the monitor it is
+set on: `when` is the question that monitor answers, `scope` is how widely it reads the
+answers. A monitor set to `"output"` still contributes its answer to what the others read,
+so one set to `"global"` can blur because of it, and where two monitors answer different
+`when`s, `"global"` blurs on either of them reaching its own.
+
+Niri also takes an `overview` key, which Hyprland's `blur` does not:
+
+| Key        | Default   | Meaning                                                                                                                                                                      |
+| ---------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `overview` | `"clear"` | `"clear"`: sharp for as long as the overview is open. `"blur"`: blurred for as long as it is open. `"follow"`: the overview does not change what `when` and `scope` decided. |
+
+```toml
+[compositor.blur]
+overview = "clear"
+```
+
+While the overview is open, `overview` short-circuits `when` and `scope`: `"blur"` or
+`"clear"` decides outright, `"follow"` leaves their answer standing.
+
+#### Override per monitor
+
+One monitor can differ, on either compositor:
+
+```toml
+[compositor]
+horizontal = "column"
+blur = { when = "non-empty", scope = "output" }
+
+[output."eDP-1".compositor]
+horizontal = "none"          # vertical stays "workspace"
+blur = { when = "focused" }  # scope stays "output"
+```
+
 ### `[scroll.vertical]` and `[scroll.horizontal]`
 
 The two parallax axes take the same five keys and are configured apart. What moves each
 one is `[compositor]` above; these say how far, which way and how fast it moves. Both are
 per output.
+`scroll.<axis>.travel` changes how far an axis moves while the daemon runs, `0` included.
 
 | Key           | Default       | Meaning                                                                                      |
 | ------------- | ------------- | -------------------------------------------------------------------------------------------- |
@@ -379,8 +387,8 @@ A compositor that pans the wallpaper continuously has no adjacent stop to measur
 | `duration-ms`  | `300`            |                                                                                                     |
 | `easing`       | `"in-out-cubic"` | See [easing functions](#easing-functions).                                                          |
 
-An output blurs when the compositor drives it to, or when the control socket has asked for
-it; see [usage.md](usage.md#the-blur-signal). What the compositor drives it on is
+An output blurs when the compositor drives it to, _OR_ when the control socket has asked for
+it; see [cli.md](cli.md#the-blur-signal). What the compositor drives it on is
 [`[compositor] blur`](#when-an-output-blurs), which by default is whether the output's
 active workspace holds any window.
 
@@ -390,7 +398,7 @@ number is the blur's extent on screen, and one radius means the same thing on mo
 different scales.
 
 `tint` follows the wallpaper's own coverage, so it reaches a transparent part of an image
-as far as that part is there; see [usage.md](usage.md#transparent-wallpapers).
+as far as that part is there.
 
 ### `[zoom]`
 
@@ -430,8 +438,7 @@ the figure above. `mode = "none"` gives that memory back and swaps instantly.
 `at-start` covers the daemon starting, a monitor being plugged in, and any other moment an
 output goes from showing nothing to showing something. It uses the same `duration-ms` and
 `easing`, and `mode = "none"` turns it off along with the crossfade. What shows through
-while it runs is whatever the compositor draws below the layer surface; see
-[usage.md](usage.md#transparent-wallpapers).
+while it runs is whatever the compositor draws below the layer surface.
 
 An output going the other way, from showing something to showing nothing, fades out over
 the same `duration-ms` and `easing` and is left transparent.
@@ -465,6 +472,12 @@ directory. `parra reload` picks the file up again, and so does restarting the da
 ## Easing functions
 
 `linear`, `out-quad`, `in-out-quad`, `out-cubic`, `in-out-cubic`, `out-quint`.
+
+> [!TIP]
+>
+> [Easing Functions Cheat Sheet][easings]
+>
+> [easings]: https://easings.net/
 
 ## Errors
 

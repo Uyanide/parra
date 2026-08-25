@@ -19,83 +19,26 @@ and behaves exactly as expected for this type of program:
 - **transition effect** while switching, and while a wallpaper arrives or leaves
 - **transparent wallpapers**, blended over whatever the compositor draws below
 - **automatic wallpaper restoration** at the next start
-- **configuration override** per monitor
 
 and with some extras:
 
-- **control via IPC** including setting wallpapers, setting blurring, quering
-  status, subscribing event-stream etc.
-- **a listenable event stream** that describes every animation as it starts and
-  reports changes in the status such as wallpapers and outputs
+- **configuration override** per monitor
+- **control via IPC** for multiple actions and queries
+- **a listenable event stream** that reports changes in status
 
 > [!NOTE]
 >
-> niri and Hyprland are supported so far. Support for more compositors might be
-> added in the future.
->
-> Not every effect exists on every compositor: e.g. Hyprland has no built-in
-> overview, so the zoom never moves there. See [usage.md](docs/usage.md).
+> Only niri and Hyprland are supported with compositor-driven effects so far.
+> Support for more compositors may arrive in the future.
 
-## Dependencies
+## Documentations
 
-Native libraries:
-
-- libwayland (client)
-- libwayland (EGL platform)
-- libglvnd (EGL)
-
-Buildtime:
-
-- pkg-config
-- rust toolchain (>=1.88)
-
-Runtime:
-
-- A supported compositor
-
-These can be installed with apt on Debian/Ubuntu:
-
-```bash
-sudo apt install libwayland-dev libegl-dev pkgconf
-```
-
-or with pacman on Archlinux:
-
-```bash
-sudo pacman -S --needed wayland libglvnd mesa pkgconf
-```
-
-The rust toolchain can be installed with the distro's package manager (e.g.
-`rustc` and `cargo` on Debian/Ubuntu), or with [rustup][rustup-home], which
-often provides newer versions and more flexibility.
-
-[rustup-home]: https://rustup.rs
-
-## Build
-
-This is a standard cargo project with a single binary output, so you can build
-it normally with
-
-```sh
-cargo build --release --locked
-```
-
-and (optionally) install in the way you like, e.g.
-
-```sh
-sudo install -Dm755 -t /usr/local/bin target/release/parra
-```
-
-## Documentation
-
-common:
-
-- [Usage](docs/usage.md) — compositor integration and instructions for normal usage
-- [Configuration](docs/config.md) — every key, defaults, per-monitor inheritance
-- [CLI](docs/cli.md) — command syntax, global flags, exit codes
-- [Control protocol](docs/control-protocol.md) — the socket, requests, responses, snapshots
-- [Environment](docs/environment.md) — GPU selection, logging, where files go, and other
-  things that is deliberately not configurable
+- [Installation](docs/install.md)
+- [Usage](docs/usage.md)
+- [Configuration](docs/config.md)
+- [CLI](docs/cli.md)
+- [Control protocol](docs/control-protocol.md)
+- [Environment](docs/environment.md)
 
 development:
 

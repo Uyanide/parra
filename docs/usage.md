@@ -1,13 +1,35 @@
 # Usage
 
-Build and install the binary first, as the [README#build](../README.md#build) describes.
-Everything below assumes `parra` is on your `PATH`.
+> [!NOTE]
+> Please install the binary first, as the [install.md](install.md) describes.
+> Everything below assumes `parra` is on your `$PATH`.
+
+- [Usage](#usage)
+  - [TL;DR](#tldr)
+  - [Compositor integration](#compositor-integration)
+    - [niri](#niri)
+      - [Put within backdrop](#put-within-backdrop)
+      - [Match animations](#match-animations)
+      - [Autostart](#autostart)
+    - [Hyprland](#hyprland)
+      - [Declare the span](#declare-the-span)
+      - [Match animations](#match-animations-1)
+      - [What Hyprland does not report](#what-hyprland-does-not-report)
+      - [Start it at login](#start-it-at-login)
+  - [Autostart via Systemd-Unit](#autostart-via-systemd-unit)
+  - [Configuration](#configuration)
+  - [Choosing a wallpaper](#choosing-a-wallpaper)
+    - [Live switching](#live-switching)
+    - [Temporary preview](#temporary-preview)
 
 ## TL;DR
 
-parra works with any compositor that supports wlr-layer-shell. Animated effects --
-scrolling, blurring, zooming -- need a supported compositor, and so far those are niri and
+parra works with any compositor that supports wlr-layer-shell. need a supported compositor, which so far those are niri and
 Hyprland.
+
+parra works with any compostior that implements wlr-layer-shell. However,
+the compositor-driven animation effects need a supported compositor. And so far
+thoses are niri and Hyprland.
 
 <details>
 <summary>For niri</summary>
@@ -119,9 +141,13 @@ if that variable is unset, or any file it includes.
 
 #### Put within backdrop
 
-Put the wallpaper layer in the backdrop. The regex matches the layer-shell namespace,
-which defaults to the program's own name; change it if you set `[general] namespace` in
-parra's config:
+The wallpaper layer is designed to be put in the backdrop (overview), rather
+in the workspace background as niri's defaults.
+
+> [!NOTE]
+> The regex matches the layer-shell namespace, which defaults to `parra`, the
+> program's own name. Change it if you set `[general] namespace` in parra's
+> config
 
 ```kdl
 layer-rule {
@@ -129,8 +155,6 @@ layer-rule {
   place-within-backdrop true
 }
 ```
-
-Without this rule niri draws the wallpaper inside every workspace thumbnail.
 
 Make the workspace background transparent so the backdrop shows through:
 
@@ -140,7 +164,7 @@ layout {
 }
 ```
 
-Optionally, drop the workspace shadow for a cleaner overview:
+_Optionally_, drop the workspace shadow for a cleaner overview:
 
 ```kdl
 overview {
@@ -178,7 +202,7 @@ animations {
 }
 ```
 
-and for the horizontal parallax, if you enable it:
+and for the horizontal parallax, case enabled:
 
 ```kdl
 animations {
@@ -189,11 +213,7 @@ animations {
 }
 ```
 
-That is a real change to how niri feels. Their defaults are
-`spring damping-ratio=1.0 stiffness=1000 epsilon=0.0001` for `workspace-switch` and the
-same with `stiffness=800` for the other two.
-
-The curves the two have in common:
+For reference, the curves the two have:
 
 | parra        | niri           |
 | ------------ | -------------- |
@@ -219,6 +239,18 @@ Finally, start the daemon at login:
 spawn-at-startup "parra" "daemon"
 ```
 
+> [!TIP]
+>
+> _Alternatively_, the daemon can be started with the shipped
+> [Systemd-Unit](../examples/parra.service), case installed:
+>
+> ```bash
+> systemctl --user add-wants niri.service parra.service
+> ```
+>
+> For more information about this method, please refer to
+> [this section](#autostart-via-systemd-unit) below.
+
 ### Hyprland
 
 All of this goes in `$XDG_CONFIG_HOME/hypr/hyprland.lua`, or `~/.config/hypr/hyprland.lua`
@@ -226,38 +258,40 @@ if that variable is unset, or any file it requires.
 
 #### Declare the span
 
-Hyprland only names its workspaces. They are global rather than per monitor, and it creates
-and destroys them as they are used, so counting the live ones would resize the travel
-whenever a workspace appeared or went away. Say what the travel covers instead, in parra's
-own configuration file:
+Hyprland numbers its workspaces across monitors and creates them as they are used, so
+parra cannot count them; instead a `span` in `~/.config/parra/hyprland.toml` declares
+which workspaces the wallpaper travels through, `"1"` through `"10"` by default:
 
 ```toml
 [compositor]
 span = 10
 ```
 
-The numbering runs across every monitor rather than restarting on each, so a second monitor
-shows only part of that range and travels through only part of its wallpaper. Give it the
-workspaces it actually shows:
+With more than one monitor, give every output the workspaces it actually shows, and pin
+them there so Hyprland stops moving them between monitors:
 
 ```toml
 [output."eDP-1".compositor]
 span = ["6-8"]
 ```
 
-Hyprland moves workspaces between monitors unless it is told not to, and while it does, no
-fixed list is right for either monitor for long. Binding them is what makes a declaration
-match what is on screen:
-
 ```lua
-hl.workspace_rule({ workspace = 1, monitor = "DP-1", persistent = true })
+hl.workspace_rule({ workspace = 6, monitor = "eDP-1", persistent = true })
+hl.workspace_rule({ workspace = 7, monitor = "eDP-1", persistent = true })
+hl.workspace_rule({ workspace = 8, monitor = "eDP-1", persistent = true })
 ```
 
-A workspace outside a numbered span lands on the nearest one in it; outside a named span it
-sits centred. The full rules, and what `"6-8"` stands for, are in
-[config.md](config.md#the-span).
+Named workspaces go into the span by name, in travel order:
 
-#### Match Hyprland's animations
+```toml
+[compositor]
+span = ["browser", "code", "mail"]
+```
+
+What `"6-8"` stands for, where a workspace outside the span lands, and everything else
+about it is in [config.md](config.md#the-span).
+
+#### Match animations
 
 Match Hyprland's animations to parra's, or the wallpaper will lead or lag the windows it
 sits behind. Two of Hyprland's have a counterpart here:
@@ -284,35 +318,21 @@ A switch reads `workspacesIn` and `workspacesOut`, and falls back to the `worksp
 hang off only for what neither sets. The configuration Hyprland writes for a new session
 sets both to `fade`, so the two children are worth stating.
 
-The style decides which axis follows the workspace, since parra's vertical axis is only
-ever the vertical one. `slide` and `slidefade` travel sideways, which is what parra's own
-defaults expect, and `fade` travels nowhere at all. `slidevert` and `slidefadevert` travel
-vertically, and want the axis moved across to meet them:
+The style decides which axis follows the workspace, e.g.
 
-```toml
-[compositor]
-vertical = "workspace"
-horizontal = "none"
-```
+- `slide` and `slidefade` travel sideways, which is what parra's own defaults expect;
+- `slidevert` and `slidefadevert` travel vertically;
+- `fade` travels nowhere at all.
 
 #### What Hyprland does not report
 
-Two of parra's effects have nothing to drive them here, and neither goes unsaid:
+Two of parra's effects have nothing to drive them here:
 
-- There is no position within a workspace. Hyprland's layouts publish nothing over IPC that
-  a second parallax axis could follow, so `[compositor]` takes no `"column"` value at all
-  and a file asking for one is refused when it is read.
-- There is no overview. What stands in for one is a plugin, and a plugin's dispatcher is
-  invisible from outside, so the zoom holds at whatever `[zoom] crop-ratio` implies, and the
-  daemon logs that nothing drives it when it connects. That is still doing its main job,
-  which is leaving headroom for the parallax to travel through.
-
-Blur defaults to whether a monitor's workspace holds any window, not whether it holds the
-focus, so a monitor with windows on it stays blurred after the focus leaves for another
-monitor or a launcher. `when = "focused"` switches to following the focus instead, and
-`scope = "global"` blurs every monitor together. See
-[config.md](config.md#when-an-output-blurs), or ask over the control socket as
-[the blur signal](#the-blur-signal) describes.
+- **The second scroll axis**. Although Hyprland supports `scrolling` layouts, this are
+  some obstacles to obtaining column information via IPC. So only one scroll axis based
+  on workspace switching is currently supported.
+- **Overview Zoomin/out**. There is no builtin overview in Hyprland. So the zoom holds
+  at whatevet `[zoom] crop-ratio` implies through the entire session.
 
 #### Start it at login
 
@@ -324,24 +344,38 @@ hl.on("hyprland.start", function()
 end)
 ```
 
+> [!TIP]
+>
+> _Alternatively_, the daemon can be started with the shipped
+> [Systemd-Unit](../examples/parra.service), case the unit is installed and the Hyprland
+> session is managed by [uwsm][uwsm]:
+>
+> ```bash
+> systemctl --user add-wants wayland-wm@hyprland.service parra.service
+> ```
+>
+> For more information about this method, please refer to
+> [this section](#autostart-via-systemd-unit) below.
+
 ## Autostart via Systemd-Unit
 
 > [!IMPORTANT]
 >
-> The guide in this section is **OPTIONAL**, parra can be started with a simple
-> start-up shell command in the configuration file of the compositor, e.g.
-> `spawn-at-startup "parra" "daemon"` for niri. In which case, please refer to
-> [Compositor integration](#compositor-integration) section above.
+> This section is **OPTIONAL**, parra can be started with a simple start-up shell command
+> in the configuration file of the compositor, e.g.
+> `spawn-at-startup "parra" "daemon"` for niri. Please refer to
+> [Compositor integration](#compositor-integration) section above for instructions.
 
-Copy [examples/parra.service](../examples/parra.service) into a unit search path, e.g.
+Install [examples/parra.service](../examples/parra.service) to a unit search path, e.g.
 `~/.config/systemd/user/`, point `ExecStart` at wherever the binary lives, and reload:
 
 ```sh
 systemctl --user daemon-reload
 ```
 
-The unit carries no `[Install]` section: rather than enabling it, bind it to the
-compositor's own session unit, so it autostarts and dies together with that compositor:
+The unit carries no `[Install]` section for purpose. Rather than enabling it, bind it to
+the compositor's own session unit, so it autostarts and dies together with that
+compositor:
 
 ```sh
 # under niri:
@@ -352,49 +386,32 @@ systemctl --user add-wants niri.service parra.service
 systemctl --user add-wants wayland-wm@hyprland.service parra.service
 ```
 
-Both compositors export the session environment, `WAYLAND_DISPLAY` included, to the user
-manager, and both tie `graphical-session.target`, which the unit is ordered after and is
-a part of, to the compositor's lifetime. Plain Hyprland does neither, which leaves the
-unit nothing to hang off; running the session through [uwsm][uwsm] provides both and is
-the recommended setup there.
+> [!TIP]
+>
+> Some compositors such as Hyprland does not start as systemd-unit by default. In such
+> cases, [uwsm][uwsm] can be used to run and manage the session, providing
+> `graphical-session.target` parra ties to and [session environments](environment.md)
+> parra reads.
 
 [uwsm]: https://github.com/Vladimir-csp/uwsm
 
-To start it right away, without waiting for the next login:
+To start parra right away, without waiting for the next login:
 
 ```sh
 systemctl --user start parra.service
 ```
 
-Undoing the binding is removing the symlink it created:
+Undoing the binding is removing the symlink it created, e.g.
 
 ```sh
 rm ~/.config/systemd/user/niri.service.wants/parra.service
 ```
 
-## Shell completions
-
-`parra completions SHELL` prints a completion script to stdout, for one of `bash`,
-`zsh`, `fish`, `powershell`, or `elvish`. Where it goes depends on the shell:
-
-```sh
-# bash, once bash-completion is installed:
-parra completions bash > ~/.local/share/bash-completion/completions/parra
-
-# zsh, into a directory on your $fpath:
-parra completions zsh > "${fpath[1]}/_parra"
-
-# fish:
-parra completions fish > ~/.config/fish/completions/parra.fish
-```
-
-New shells pick the scripts up on their next start.
-
 ## Configuration
 
 > [!NOTE]
 >
-> The configuration file is **OPTIONAL**, a missing file is _NOT_ an error, as the
+> The configuration file is _OPTIONAL_, a missing file is _NOT_ an error, as the
 > built-in defaults are a working configuration. Only create the configuration file
 > when one is needed.
 
@@ -413,11 +430,16 @@ Check a file before restarting anything:
 
 ```sh
 parra daemon --check
+
+# Optionally specify the backend
+parra daemon --check niri   # or hyprland
 ```
 
 Every key, its default and what a reload picks up are in [config.md](config.md).
 
 ## Choosing a wallpaper
+
+### Live switching
 
 Hand one to the running daemon:
 
@@ -431,7 +453,7 @@ parra set ~/pictures/passing.png --no-save  # this session only, not restored af
 file that turns out not to be an image is reported in the log; see
 [environment.md](environment.md#logging).
 
-That choice is remembered. It outlives a config reload, a monitor being unplugged and
+The choice is remembered. It outlives a config reload, a monitor being unplugged and
 plugged back in, and the daemon itself.
 
 `unset` takes one back:
@@ -445,134 +467,19 @@ It uncovers the next wallpaper down, walking the order the daemon resolves in:
 
 1. an output's own wallpaper
 2. the one set for every output
-3. `[wallpaper] fallback`
-4. nothing, fully transparent
+3. an output's own `[wallpaper] fallback`, see [config.md](config.md#wallpaper)
+4. `[wallpaper] fallback` for every output, see [config.md](config.md#wallpaper)
+5. nothing, fully transparent
 
-`--no-save` works on both: change what is on screen now and leave the record alone, so the
-next start goes back to what it says. On `set` that is a wallpaper shown without being
-adopted; on `unset` it is one dropped while staying recorded.
+### Temporary preview
 
-`restore` is the way back without waiting for that next start:
+`--no-save` changes what is on screen now and leave the record untouched, so the next
+start or `restore` cmd sets the wallpaper to what is recorded. This flag works
+similarly for both `set` and `unset` cmd. e.g.
 
 ```sh
 parra set ~/pictures/passing.png --no-save
 parra restore                  # back to what is recorded, on every output
+# or
 parra restore --output eDP-1   # back to eDP-1's own recorded wallpaper
 ```
-
-It empties the slots it addresses before re-applying the record, so it undoes a `--no-save`
-set and a `--no-save` unset alike. Restoring what is already showing does nothing at all.
-
-The config file says what to show when nothing has been chosen yet:
-
-```toml
-[wallpaper]
-fallback = "~/pictures/wall.png"
-```
-
-### Transparent wallpapers
-
-An image with an alpha channel is drawn with it. Where the wallpaper is not fully opaque,
-whatever the compositor draws below the layer surface shows through.
-
-While a wallpaper has any translucent pixel, the surface is no longer declared opaque and
-the compositor blends it. An image whose alpha channel is present but says nothing
-everywhere keeps being treated as opaque.
-
-The same thing shows through while a wallpaper is arriving on an output that had none, at
-startup or when a monitor is plugged in. [`[transition] at-start`](config.md#transition)
-controls that, and turning it off is what makes an arrival appear outright.
-
-## State and cache
-
-Two more locations, **neither** of them meant to be edited by hand. `--state PATH` and
-`--cache-dir PATH` override them.
-
-| Location                           | Holds                                                                        |
-| ---------------------------------- | ---------------------------------------------------------------------------- |
-| `$XDG_STATE_HOME/parra/state.toml` | Which wallpaper each slot was last set to, so a restart restores it.         |
-| `$XDG_CACHE_HOME/parra/*.qoi`      | Those wallpapers, already resized, so a restart skips decoding the original. |
-
-`$HOME/.local/state` and `$HOME/.cache` are the fallbacks.
-
-The state file records the path you asked for, and `parra set` and `parra unset` rewrite
-it. Do _NOT_ edit it by hand: the daemon reads it once at startup and rewrites it whole on
-every change, so an edit made while it is running is overwritten with no warning.
-
-A cached copy is kept at the size the largest monitor showing it needs. It is used again
-as long as it still covers that, and re-made from the original when it does not, which is
-what a rotation, a resolution change, a scale change or a smaller `crop-ratio` all amount
-to. Copies no longer pointed at are deleted when the daemon starts and after every `set`
-or `unset`.
-
-## Checking it works
-
-```sh
-parra ping     # protocol {version}
-parra state    # every output, what it shows, where its animations are
-```
-
-`parra state` should list each connector with a size, a wallpaper path and a set of flags.
-If an output is missing, the compositor has not configured its layer surface yet.
-
-`ping` exits 4 when the daemon speaks a different protocol from this binary, which means a
-daemon still running from before the binary was replaced. Restart it.
-
-For scripts, `--json` prints the reply verbatim:
-
-```sh
-parra state --json | jq '.state.outputs[] | {name, blur: .blur.amount.current}'
-```
-
-## Listening for changes
-
-Whatever else you run on your screen can follow the wallpaper instead of polling it:
-
-```sh
-parra events                   # readable, one line per change
-parra events --json            # for scripts
-parra events --output DP-1     # only what concerns one monitor
-```
-
-The stream opens with a line per monitor describing what it shows and where its values
-are, then reports what the daemon decides: a wallpaper changing, an image that would not
-decode, a monitor arriving or leaving, the config file being adopted, and every animation
-as it starts.
-
-An animation carries where it is going, how long it takes and which curve it uses, which
-is enough to run the same curve on your own clock:
-
-```sh
-parra events --json --output DP-1 \
-  | jq -c --unbuffered 'select(.animation?.property == "blur") | .animation'
-```
-
-```json
-{ "output": "DP-1", "property": "blur", "from": 0.0, "to": 1.0, "duration_us": 300000, "easing": "in-out-cubic" }
-```
-
-Listening costs the daemon no frames. The stream ends when the daemon does, and `parra
-events` then exits 1, so a supervisor can restart it. Every event and the rules it follows
-is in [control-protocol.md](control-protocol.md#events).
-
-## The blur signal
-
-A bar or a sidebar can ask for the wallpaper behind it to blur while it is up, and turn it
-off again afterwards:
-
-```sh
-parra blur on --output DP-1
-parra blur off --output DP-1
-```
-
-_'output blurs'_ = _'the compositor drives this output to blur'_ **OR** _'blur signal is set for this output'_
-
-What the compositor drives it on is [`[compositor] blur`](config.md#when-an-output-blurs),
-which by default is the output's active workspace holding any window.
-
-Command syntax and exit codes are in [cli.md](cli.md). The full protocol, every request
-and response, is in [control-protocol.md](control-protocol.md).
-
-## Troubleshooting
-
-See [environment.md#logging](./environment.md#logging) for logging.

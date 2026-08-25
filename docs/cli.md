@@ -66,12 +66,16 @@ also clears any per-output requests.
 
 Reports the daemon's current state. `--output` reports one output instead of all of them.
 `--json` prints the daemon's reply verbatim; without it you get a readable summary.
+An output missing from the report is one whose layer surface the compositor has not
+configured yet.
 
 ### `parra events [--output NAME] [--json]`
 
-Follows what the daemon changes, one event per line, until the daemon stops. The outputs
-that already exist arrive first. `--output` reports only what concerns one output, plus
-the events that name none. `--json` prints each event as the daemon sent it.
+Whatever else you run on your screen can follow the wallpaper here instead of polling for
+it; listening costs the daemon no frames. The daemon streams what it changes, one event
+per line, until it stops. The outputs that already exist arrive first. `--output` reports
+only what concerns one output, plus the events that name none. `--json` prints each event
+as the daemon sent it.
 
 The full list of events and the rules they follow is in
 [control-protocol.md](control-protocol.md#events).
@@ -86,7 +90,8 @@ wallpaper-failed /srv/broken.png
 config-reloaded
 ```
 
-It exits 1 when the daemon goes away, and 0 when whatever it was piped into stops reading.
+It exits 1 when the daemon goes away -- a supervisor watches for that and starts it again
+-- and 0 when whatever it was piped into stops reading.
 
 ### `parra reload`
 
@@ -97,6 +102,22 @@ Asks the daemon to re-read its config file.
 Checks that the daemon is responding. It prints `protocol N` and exits 0 when the daemon's
 protocol version matches this binary; when they differ it still prints the daemon's version
 and exits 4.
+A mismatch means a daemon still running from before the binary was replaced; restart it.
+
+## The blur signal
+
+A bar or a sidebar can ask for the wallpaper behind it to blur while it is up, and turn it
+off again afterwards:
+
+```sh
+parra blur on --output DP-1
+parra blur off --output DP-1
+```
+
+_'output blurs'_ = _'the compositor drives this output to blur'_ **OR** _'blur signal is set for this output'_
+
+What the compositor drives it on is [`[compositor] blur`](config.md#when-an-output-blurs),
+by default whether the output's active workspace holds any window.
 
 ## Exit codes
 
