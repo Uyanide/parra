@@ -300,11 +300,11 @@ mod tests {
     use crate::backends::niri::wire;
 
     const FOCUSED: Blur =
-        Blur { when: When::Focused, scope: Scope::Output, overview: Overview::Follow };
+        Blur { when: When::Focused, scope: Scope::Output, overview: Overview::Clear };
     const NON_EMPTY: Blur =
-        Blur { when: When::NonEmpty, scope: Scope::Output, overview: Overview::Follow };
+        Blur { when: When::NonEmpty, scope: Scope::Output, overview: Overview::Clear };
     const EVERYWHERE: Blur =
-        Blur { when: When::Focused, scope: Scope::Global, overview: Overview::Follow };
+        Blur { when: When::Focused, scope: Scope::Global, overview: Overview::Clear };
 
     const DEFAULTS: Params =
         Params { vertical: Axis::Workspace, horizontal: Axis::None, blur: NON_EMPTY };
@@ -717,6 +717,54 @@ mod tests {
         assert_eq!(
             zoomed_out(&tracker.drives(&everywhere(DEFAULTS))),
             vec![("DP-1", true), ("eDP-1", true)]
+        );
+    }
+
+    /// The default: opening the overview clears every output, `when` and `scope` aside.
+    #[test]
+    fn the_default_overview_clears_every_output_while_it_is_open() {
+        let mut tracker = populated();
+        assert_eq!(
+            blurred(&tracker.drives(&everywhere(DEFAULTS))),
+            vec!["DP-1", "eDP-1"],
+            "both active workspaces hold a window, and the overview is not open yet"
+        );
+
+        feed(&mut tracker, r#"{"OverviewOpenedOrClosed":{"is_open":true}}"#);
+        assert!(
+            blurred(&tracker.drives(&everywhere(DEFAULTS))).is_empty(),
+            "windows are still there, but the default clears the overview open"
+        );
+    }
+
+    #[test]
+    fn overview_can_be_set_to_blur_every_output_instead() {
+        let blur = Blur { overview: Overview::Blur, ..FOCUSED };
+        let settings = everywhere(Params { blur, ..DEFAULTS });
+        let mut tracker = populated();
+        assert_eq!(
+            blurred(&tracker.drives(&settings)),
+            vec!["DP-1"],
+            "only DP-1 holds the focus, and the overview is not open yet"
+        );
+
+        feed(&mut tracker, r#"{"OverviewOpenedOrClosed":{"is_open":true}}"#);
+        assert_eq!(
+            blurred(&tracker.drives(&settings)),
+            vec!["DP-1", "eDP-1"],
+            "eDP-1 still holds no focus, but the overview forces it to blur too"
+        );
+    }
+
+    #[test]
+    fn overview_can_be_set_to_leave_the_usual_rule_standing() {
+        let blur = Blur { overview: Overview::Follow, ..FOCUSED };
+        let mut tracker = populated();
+        feed(&mut tracker, r#"{"OverviewOpenedOrClosed":{"is_open":true}}"#);
+        assert_eq!(
+            blurred(&tracker.drives(&everywhere(Params { blur, ..DEFAULTS }))),
+            vec!["DP-1"],
+            "focus decides it exactly as it would with the overview closed"
         );
     }
 

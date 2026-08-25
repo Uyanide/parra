@@ -79,7 +79,7 @@ travels through.
 | ------------ | ------------------------------------ | -------------------------------------------------------------------------- |
 | `vertical`   | `"workspace"`                        | `"workspace"`, `"column"` or `"none"`.                                     |
 | `horizontal` | `"none"`                             | Same values. `"none"` leaves the axis pinned to its centre.                |
-| `blur`       | `{ when = "non-empty", scope = "output", overview = "follow" }` | When an output blurs. See [When an output blurs](#when-an-output-blurs). |
+| `blur`       | `{ when = "non-empty", scope = "output", overview = "clear" }` | When an output blurs. See [When an output blurs](#when-an-output-blurs). |
 
 ```toml
 [compositor]
@@ -143,7 +143,7 @@ Niri also takes an `overview` key, which Hyprland's `blur` does not:
 
 | Key        | Default    | Meaning                                                                          |
 | ---------- | ---------- | --------------------------------------------------------------------------------- |
-| `overview` | `"follow"` | `"follow"`: the overview does not change what `when` and `scope` decided. `"blur"`: blurred for as long as the overview is open. `"clear"`: sharp for as long as it is open. |
+| `overview` | `"clear"` | `"clear"`: sharp for as long as the overview is open. `"blur"`: blurred for as long as it is open. `"follow"`: the overview does not change what `when` and `scope` decided. |
 
 ```toml
 [compositor]

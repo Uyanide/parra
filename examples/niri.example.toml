@@ -42,12 +42,12 @@ horizontal = "none"
 #             "non-empty"  its active workspace holds any window, focused or not
 #   scope     "output"     each output answers for itself
 #             "global"     every output blurs as soon as one of them answers yes
-#   overview  "follow"     the overview does not change what `when` and `scope` decided
-#             "blur"       blurred for as long as the overview is open
+#   overview  "blur"       blurred for as long as the overview is open
 #             "clear"      sharp for as long as the overview is open
+#             "follow"     the overview does not change what `when` and `scope` decided
 #
 # What a blur looks like is `[blur]` below; this is when one happens.
-blur = { when = "non-empty", scope = "output", overview = "follow" }
+blur = { when = "non-empty", scope = "output", overview = "clear" }
 
 # One monitor can differ, inheriting whatever it leaves out:
 #

@@ -66,7 +66,7 @@ pub struct Blur {
 
 impl Blur {
     const DEFAULT: Self =
-        Self { when: When::NonEmpty, scope: Scope::Output, overview: Overview::Follow };
+        Self { when: When::NonEmpty, scope: Scope::Output, overview: Overview::Clear };
 }
 
 impl Default for Blur {
@@ -105,9 +105,9 @@ pub enum Overview {
     /// Blurred for as long as the overview is open, `when` and `scope` aside.
     Blur,
     /// Sharp for as long as the overview is open, `when` and `scope` aside.
+    #[default]
     Clear,
     /// The overview does not change the answer `when` and `scope` already gave.
-    #[default]
     Follow,
 }
 
@@ -116,11 +116,7 @@ impl fmt::Display for Params {
         write!(
             f,
             "vertical={},horizontal={},blur.when={},blur.scope={},blur.overview={}",
-            self.vertical,
-            self.horizontal,
-            self.blur.when,
-            self.blur.scope,
-            self.blur.overview
+            self.vertical, self.horizontal, self.blur.when, self.blur.scope, self.blur.overview
         )
     }
 }
