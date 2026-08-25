@@ -248,12 +248,14 @@ impl Tracker {
     fn replace_windows(&mut self, windows: Vec<Window>) {
         self.window_workspace.clear();
         self.window_column.clear();
+        let mut focused = None;
         for window in windows {
             if window.is_focused {
-                self.focused_window = Some(window.id);
+                focused = Some(window.id);
             }
             self.add_window(window);
         }
+        self.focused_window = focused;
     }
 
     fn add_window(&mut self, window: Window) {
@@ -539,6 +541,31 @@ mod tests {
         let mut tracker = populated();
         feed(&mut tracker, r#"{"WindowClosed":{"id":4}}"#);
         assert!(blurred(&tracker.drives(&everywhere(FOCUSED_PARAMS))).is_empty());
+    }
+
+    #[test]
+    fn a_dump_with_nothing_focused_leaves_every_output_sharp() {
+        let mut tracker = populated();
+        feed(
+            &mut tracker,
+            r#"{"WindowsChanged":{"windows":[
+                {"id":4,"workspace_id":1,"is_focused":false,
+                 "layout":{"pos_in_scrolling_layout":[1,1]}},
+                {"id":3,"workspace_id":2,"is_focused":false,
+                 "layout":{"pos_in_scrolling_layout":[1,1]}}]}}"#,
+        );
+        assert!(blurred(&tracker.drives(&everywhere(FOCUSED_PARAMS))).is_empty());
+
+        // And a later dump says where the focus went, which is wherever it names.
+        feed(
+            &mut tracker,
+            r#"{"WindowsChanged":{"windows":[
+                {"id":4,"workspace_id":1,"is_focused":false,
+                 "layout":{"pos_in_scrolling_layout":[1,1]}},
+                {"id":3,"workspace_id":2,"is_focused":true,
+                 "layout":{"pos_in_scrolling_layout":[1,1]}}]}}"#,
+        );
+        assert_eq!(blurred(&tracker.drives(&everywhere(FOCUSED_PARAMS))), vec!["eDP-1"]);
     }
 
     #[test]
