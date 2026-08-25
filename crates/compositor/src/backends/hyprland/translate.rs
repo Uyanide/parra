@@ -157,14 +157,20 @@ impl Tracker {
             Event::WorkspaceActive { id, name } => {
                 self.names.insert(id, name);
                 if let Some(focused) = self.focused.clone() {
+                    // A window on the arriving workspace takes the focus before this says
+                    // where it landed, so a focus on the one being left moves with it.
+                    let showing = self.monitors.get(&focused).copied();
+                    if self.focused_workspace.is_some() && self.focused_workspace == showing {
+                        self.focused_workspace = Some(id);
+                    }
                     self.show(focused, id);
                 }
             }
             Event::WorkspaceCreated { id, name } | Event::WorkspaceRenamed { id, name } => {
                 self.names.insert(id, name);
             }
-            // Taken to be on what the monitor holding the focus is showing, which the
-            // compositor moves first. A monitor the cursor reaches empty reports none.
+            // Taken to be on what the monitor holding the focus is showing, corrected by a
+            // workspace change arriving after. A monitor the cursor reaches empty reports none.
             Event::ActiveWindow { focused } => {
                 self.focused_workspace = if focused { self.showing() } else { None };
             }
@@ -598,6 +604,33 @@ mod tests {
         );
     }
 
+    /// The compositor names the window arriving before it names the workspace it arrived
+    /// on, leaving the focus recorded on the one being left.
+    #[test]
+    fn switching_workspace_on_one_monitor_keeps_the_blur_on_it() {
+        let mut tracker = seeded();
+        feed(&mut tracker, "activewindowv2>>556a4d2bd690");
+        feed(&mut tracker, "workspacev2>>3,3");
+
+        let drives = tracker.drives(&settings());
+        assert_eq!(blurred(&drives), Some(output("DP-1")));
+        assert_eq!(at(&drives, "DP-1"), 0.5, "workspace 3 of 5");
+    }
+
+    #[test]
+    fn a_switch_on_the_monitor_the_cursor_reached_leaves_the_focus_where_it_is() {
+        let mut tracker = seeded();
+        feed(&mut tracker, "focusedmonv2>>eDP-1,14");
+        feed(&mut tracker, "createworkspacev2>>15,2");
+        feed(&mut tracker, "workspacev2>>15,2");
+
+        assert_eq!(
+            blurred(&tracker.drives(&settings())),
+            Some(output("DP-1")),
+            "the window holding it never left DP-1"
+        );
+    }
+
     #[test]
     fn a_snapshot_with_nothing_focused_starts_that_way() {
         let drives = seeded_with("{}").drives(&settings());
@@ -820,6 +853,27 @@ mod tests {
     fn a_tracker_that_follows_no_windows_says_so() {
         assert!(!Tracker::default().tracks_windows());
         assert!(Tracker::new(true).tracks_windows());
+    }
+
+    /// A tracker asked for no window map stays without one, however many window events
+    /// arrive: nothing reads it, so none of them may be what builds it.
+    #[test]
+    fn window_events_leave_an_unasked_for_map_unbuilt() {
+        let mut tracker = Tracker::new(false);
+        assert!(tracker.windows.is_none());
+
+        tracker.seed(
+            monitors(true),
+            wire::decode(r#"[{"id":1,"name":"1"},{"id":14,"name":"5"}]"#).unwrap(),
+            wire::decode(r#"{"address":"0x55c3da6fa460"}"#).unwrap(),
+            Vec::new(),
+        );
+        assert!(tracker.windows.is_none());
+
+        feed(&mut tracker, "openwindow>>abc,1,kitty,zsh");
+        feed(&mut tracker, "movewindowv2>>abc,14,5");
+        feed(&mut tracker, "closewindow>>abc");
+        assert!(tracker.windows.is_none());
     }
 
     /// The span is per output like every other setting, and sharing one is what makes a
