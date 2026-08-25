@@ -54,16 +54,19 @@ pub enum Axis {
     None,
 }
 
-/// When an output blurs, and whether the outputs decide it one by one or together.
+/// When an output blurs, whether the outputs decide it one by one or together, and how
+/// the overview affects it.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Blur {
     pub when: When,
     pub scope: Scope,
+    pub overview: Overview,
 }
 
 impl Blur {
-    const DEFAULT: Self = Self { when: When::NonEmpty, scope: Scope::Output };
+    const DEFAULT: Self =
+        Self { when: When::NonEmpty, scope: Scope::Output, overview: Overview::Follow };
 }
 
 impl Default for Blur {
@@ -94,12 +97,30 @@ pub enum Scope {
     Output,
 }
 
+/// How the overview being open bears on [`When`]'s answer. The overview reaches every
+/// output at once, so this is not a per-output question the way `scope` is.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum Overview {
+    /// Blurred for as long as the overview is open, `when` and `scope` aside.
+    Blur,
+    /// Sharp for as long as the overview is open, `when` and `scope` aside.
+    Clear,
+    /// The overview does not change the answer `when` and `scope` already gave.
+    #[default]
+    Follow,
+}
+
 impl fmt::Display for Params {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "vertical={},horizontal={},blur.when={},blur.scope={}",
-            self.vertical, self.horizontal, self.blur.when, self.blur.scope
+            "vertical={},horizontal={},blur.when={},blur.scope={},blur.overview={}",
+            self.vertical,
+            self.horizontal,
+            self.blur.when,
+            self.blur.scope,
+            self.blur.overview
         )
     }
 }
@@ -148,6 +169,23 @@ impl Scope {
 }
 
 impl fmt::Display for Scope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Overview {
+    /// The spelling a configuration file uses, which is what serde reads.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Overview::Blur => "blur",
+            Overview::Clear => "clear",
+            Overview::Follow => "follow",
+        }
+    }
+}
+
+impl fmt::Display for Overview {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }

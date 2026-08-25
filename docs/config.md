@@ -79,7 +79,7 @@ travels through.
 | ------------ | ------------------------------------ | -------------------------------------------------------------------------- |
 | `vertical`   | `"workspace"`                        | `"workspace"`, `"column"` or `"none"`.                                     |
 | `horizontal` | `"none"`                             | Same values. `"none"` leaves the axis pinned to its centre.                |
-| `blur`       | `{ when = "non-empty", scope = "output" }` | When an output blurs. See [When an output blurs](#when-an-output-blurs). |
+| `blur`       | `{ when = "non-empty", scope = "output", overview = "follow" }` | When an output blurs. See [When an output blurs](#when-an-output-blurs). |
 
 ```toml
 [compositor]
@@ -115,7 +115,7 @@ would have nothing to follow that the first does not already.
 
 #### When an output blurs
 
-`blur` is written the same way under either compositor, and takes two keys:
+`when` and `scope` are written the same way under either compositor:
 
 | Key     | Default    | Meaning                                                                                |
 | ------- | ---------- | -------------------------------------------------------------------------------------- |
@@ -139,11 +139,27 @@ what is read is the workspace the monitor is showing, which a scratchpad does no
 `scope` reads what every output reached, so `"global"` blurs a second monitor that has
 nothing on it because the first one qualifies.
 
-Either key can be set per monitor, and each is read from the monitor it is set on: `when` is
-the question that monitor answers, `scope` is how widely it reads the answers. A monitor set
-to `"output"` still contributes its answer to what the others read, so one set to `"global"`
-can blur because of it, and where two monitors answer different `when`s, `"global"` blurs on
-either of them reaching its own.
+Niri also takes an `overview` key, which Hyprland's `blur` does not:
+
+| Key        | Default    | Meaning                                                                          |
+| ---------- | ---------- | --------------------------------------------------------------------------------- |
+| `overview` | `"follow"` | `"follow"`: the overview does not change what `when` and `scope` decided. `"blur"`: blurred for as long as the overview is open. `"clear"`: sharp for as long as it is open. |
+
+```toml
+[compositor]
+blur = { when = "non-empty", scope = "output", overview = "blur" }
+```
+
+It reaches every output at once, the same state that drives [`[zoom]`](#zoom) back out to
+the whole image.
+
+Either of `when` and `scope` can be set per monitor, and each is read from the monitor it is
+set on: `when` is the question that monitor answers, `scope` is how widely it reads the
+answers. A monitor set to `"output"` still contributes its answer to what the others read,
+so one set to `"global"` can blur because of it, and where two monitors answer different
+`when`s, `"global"` blurs on either of them reaching its own. `overview` reads the same
+state on every monitor, so setting it on one alone changes nothing by itself; it takes
+effect paired with a `when`/`scope` override on that same monitor.
 
 `[blur]` below says what a blur looks like and how long it takes to arrive; this says when
 one happens. The external signal is a third thing again, ORed with both; see
@@ -389,6 +405,9 @@ niri means the overview is open. Hyprland reports no wider view of an output, so
 ever drives it there: `crop-ratio` is a fixed crop and the two keys beside it never fire.
 It is still doing its main job, which is leaving headroom for the parallax to travel
 through.
+
+The same overview state can also decide whether an output blurs; see niri's `overview` key
+under [When an output blurs](#when-an-output-blurs).
 
 The wallpaper is decoded at the size the deepest zoom needs, `monitor / crop-ratio` per
 axis, so a lower ratio costs more texture memory: at `0.25` that is sixteen times the area

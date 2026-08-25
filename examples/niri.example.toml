@@ -35,15 +35,19 @@ layer = "background"
 vertical = "workspace"
 horizontal = "none"
 
-# When an output blurs, and whether the outputs decide it one by one or together.
+# When an output blurs, whether the outputs decide it one by one or together, and how
+# the overview affects it.
 #
-#   when   "focused"    it holds the focused window
-#          "non-empty"  its active workspace holds any window, focused or not
-#   scope  "output"     each output answers for itself
-#          "global"     every output blurs as soon as one of them answers yes
+#   when      "focused"    it holds the focused window
+#             "non-empty"  its active workspace holds any window, focused or not
+#   scope     "output"     each output answers for itself
+#             "global"     every output blurs as soon as one of them answers yes
+#   overview  "follow"     the overview does not change what `when` and `scope` decided
+#             "blur"       blurred for as long as the overview is open
+#             "clear"      sharp for as long as the overview is open
 #
 # What a blur looks like is `[blur]` below; this is when one happens.
-blur = { when = "non-empty", scope = "output" }
+blur = { when = "non-empty", scope = "output", overview = "follow" }
 
 # One monitor can differ, inheriting whatever it leaves out:
 #

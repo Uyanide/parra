@@ -361,6 +361,15 @@ The two backends carry the keys separately, as they already carry `Axis`. One sp
 put focus and workspaces in `backends/mod.rs`, and the answers differ under it anyway: niri
 is asked what its tracker already holds, for the columns, while Hyprland has to be told.
 
+**niri's `overview` key lives beside `when` and `scope` rather than becoming a third input to
+either.** It overrides what they decided rather than joining `reached`, because the question
+it answers is not the one `scope` already asks: `scope` picks whose *own* answer an output
+reads, while the overview is not an output's answer to anything -- niri opens it for every
+monitor at once, and `OverviewOpenedOrClosed` carries no output to say otherwise, the same
+fact that already makes `ZoomedOut` uniform above. Reusing `self.overview`, the bool that
+already drives that channel, costs the key no new state and no new event. Hyprland has no
+overview to name, so its `Blur` has no third field, the same way its `Axis` has no `Column`.
+
 **Hyprland keeps a window map to answer an empty workspace, skipped only where every output
 opts out of it.** Its event stream reports a window opening, closing and being handed on,
 and never how many a workspace holds, so there is nothing to count without following each

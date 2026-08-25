@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use domain::{OutputId, Stop};
 
 use super::wire::{Event, Window, Workspace};
-use super::{Axis, Params, Scope, When};
+use super::{Axis, Overview, Params, Scope, When};
 use crate::backends::Scoped;
 use crate::event::Drive;
 
@@ -137,6 +137,13 @@ impl Tracker {
             let blurred = match params.blur.scope {
                 Scope::Global => anywhere,
                 Scope::Output => reached[output],
+            };
+            // The overview reaches every output at once, so unlike `when` and `scope`
+            // this never differs between them.
+            let blurred = match params.blur.overview {
+                Overview::Blur if self.overview => true,
+                Overview::Clear if self.overview => false,
+                _ => blurred,
             };
             drives.push(Drive::Blurred { output: output.clone(), on: blurred });
 
@@ -292,9 +299,12 @@ mod tests {
     use super::*;
     use crate::backends::niri::wire;
 
-    const FOCUSED: Blur = Blur { when: When::Focused, scope: Scope::Output };
-    const NON_EMPTY: Blur = Blur { when: When::NonEmpty, scope: Scope::Output };
-    const EVERYWHERE: Blur = Blur { when: When::Focused, scope: Scope::Global };
+    const FOCUSED: Blur =
+        Blur { when: When::Focused, scope: Scope::Output, overview: Overview::Follow };
+    const NON_EMPTY: Blur =
+        Blur { when: When::NonEmpty, scope: Scope::Output, overview: Overview::Follow };
+    const EVERYWHERE: Blur =
+        Blur { when: When::Focused, scope: Scope::Global, overview: Overview::Follow };
 
     const DEFAULTS: Params =
         Params { vertical: Axis::Workspace, horizontal: Axis::None, blur: NON_EMPTY };
@@ -579,8 +589,8 @@ mod tests {
         assert!(blurred(&tracker.drives(&everywhere(FOCUSED_PARAMS))).is_empty());
     }
 
-    /// The names printed by [`When`] and [`Scope`] are the ones a file is written with, for
-    /// the same reason [`Axis`]'s are.
+    /// The names printed by [`When`], [`Scope`] and [`Overview`] are the ones a file is
+    /// written with, for the same reason [`Axis`]'s are.
     #[test]
     fn every_blur_setting_prints_the_name_serde_reads() {
         for when in [When::Focused, When::NonEmpty] {
@@ -592,6 +602,11 @@ mod tests {
             let json = format!(r#"{{"blur":{{"scope":"{scope}"}}}}"#);
             let params: Params = serde_json::from_str(&json).expect("its own name should parse");
             assert_eq!(params.blur.scope, scope);
+        }
+        for overview in [Overview::Blur, Overview::Clear, Overview::Follow] {
+            let json = format!(r#"{{"blur":{{"overview":"{overview}"}}}}"#);
+            let params: Params = serde_json::from_str(&json).expect("its own name should parse");
+            assert_eq!(params.blur.overview, overview);
         }
     }
 
