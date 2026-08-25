@@ -295,6 +295,8 @@ mod tests {
     const EVERYWHERE: Blur = Blur { when: When::Focused, scope: Scope::Global };
 
     const DEFAULTS: Params =
+        Params { vertical: Axis::Workspace, horizontal: Axis::None, blur: NON_EMPTY };
+    const FOCUSED_PARAMS: Params =
         Params { vertical: Axis::Workspace, horizontal: Axis::None, blur: FOCUSED };
     const BY_COLUMN: Params =
         Params { vertical: Axis::Workspace, horizontal: Axis::Column, blur: FOCUSED };
@@ -505,7 +507,7 @@ mod tests {
 
     #[test]
     fn every_output_is_told_whether_to_blur_and_only_one_is() {
-        let drives = populated().drives(&everywhere(DEFAULTS));
+        let drives = populated().drives(&everywhere(FOCUSED_PARAMS));
         let told: Vec<&str> = drives
             .iter()
             .filter_map(|drive| match drive {
@@ -522,21 +524,21 @@ mod tests {
     fn focusing_a_window_on_the_other_monitor_moves_the_blur() {
         let mut tracker = populated();
         feed(&mut tracker, r#"{"WindowFocusChanged":{"id":3}}"#);
-        assert_eq!(blurred(&tracker.drives(&everywhere(DEFAULTS))), vec!["eDP-1"]);
+        assert_eq!(blurred(&tracker.drives(&everywhere(FOCUSED_PARAMS))), vec!["eDP-1"]);
     }
 
     #[test]
     fn losing_focus_leaves_every_output_sharp() {
         let mut tracker = populated();
         feed(&mut tracker, r#"{"WindowFocusChanged":{"id":null}}"#);
-        assert!(blurred(&tracker.drives(&everywhere(DEFAULTS))).is_empty());
+        assert!(blurred(&tracker.drives(&everywhere(FOCUSED_PARAMS))).is_empty());
     }
 
     #[test]
     fn closing_the_focused_window_leaves_every_output_sharp() {
         let mut tracker = populated();
         feed(&mut tracker, r#"{"WindowClosed":{"id":4}}"#);
-        assert!(blurred(&tracker.drives(&everywhere(DEFAULTS))).is_empty());
+        assert!(blurred(&tracker.drives(&everywhere(FOCUSED_PARAMS))).is_empty());
     }
 
     #[test]
@@ -547,7 +549,7 @@ mod tests {
             r#"{"WindowOpenedOrChanged":{"window":
                 {"id":99,"workspace_id":null,"is_focused":true,"layout":{}}}}"#,
         );
-        assert!(blurred(&tracker.drives(&everywhere(DEFAULTS))).is_empty());
+        assert!(blurred(&tracker.drives(&everywhere(FOCUSED_PARAMS))).is_empty());
     }
 
     /// The names printed by [`When`] and [`Scope`] are the ones a file is written with, for
@@ -620,7 +622,7 @@ mod tests {
     #[test]
     fn one_output_may_blur_on_a_different_rule_from_the_rest() {
         let mut settings = everywhere(Params { blur: NON_EMPTY, ..DEFAULTS });
-        settings.set_output(OutputId::new("DP-1"), DEFAULTS);
+        settings.set_output(OutputId::new("DP-1"), FOCUSED_PARAMS);
 
         let mut tracker = populated();
         feed(&mut tracker, r#"{"WindowFocusChanged":{"id":3}}"#);
@@ -637,7 +639,7 @@ mod tests {
     fn an_output_deciding_alone_still_answers_for_one_deciding_together() {
         let together = Blur { scope: Scope::Global, ..NON_EMPTY };
         let mut settings = everywhere(Params { blur: together, ..DEFAULTS });
-        settings.set_output(OutputId::new("DP-1"), DEFAULTS);
+        settings.set_output(OutputId::new("DP-1"), FOCUSED_PARAMS);
 
         let mut tracker = populated();
         feed(
@@ -653,7 +655,7 @@ mod tests {
         );
 
         let mut alone = everywhere(Params { blur: NON_EMPTY, ..DEFAULTS });
-        alone.set_output(OutputId::new("DP-1"), DEFAULTS);
+        alone.set_output(OutputId::new("DP-1"), FOCUSED_PARAMS);
         assert_eq!(
             blurred(&tracker.drives(&alone)),
             vec!["DP-1"],

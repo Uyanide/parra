@@ -48,7 +48,7 @@ horizontal = "workspace"
 #          "global"     every output blurs as soon as one of them answers yes
 #
 # What a blur looks like is `[blur]` below; this is when one happens.
-blur = { when = "focused", scope = "output" }
+blur = { when = "non-empty", scope = "output" }
 
 # The workspaces the travel covers, in the order it travels through them. A
 # number means the workspaces named "1" through "N"; a list names them instead,

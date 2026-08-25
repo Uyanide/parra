@@ -79,7 +79,7 @@ travels through.
 | ------------ | ------------------------------------ | -------------------------------------------------------------------------- |
 | `vertical`   | `"workspace"`                        | `"workspace"`, `"column"` or `"none"`.                                     |
 | `horizontal` | `"none"`                             | Same values. `"none"` leaves the axis pinned to its centre.                |
-| `blur`       | `{ when = "focused", scope = "output" }` | When an output blurs. See [When an output blurs](#when-an-output-blurs). |
+| `blur`       | `{ when = "non-empty", scope = "output" }` | When an output blurs. See [When an output blurs](#when-an-output-blurs). |
 
 ```toml
 [compositor]
@@ -100,7 +100,7 @@ monitor whose focused window is floating or fullscreen.
 | `vertical`   | `"none"`                               | `"workspace"` or `"none"`.                                                 |
 | `horizontal` | `"workspace"`                          | Same values. `"none"` leaves the axis pinned to its centre.                |
 | `span`       | `10`                                   | The workspaces the travel covers. See [The span](#the-span).               |
-| `blur`       | `{ when = "focused", scope = "output" }` | When an output blurs. See [When an output blurs](#when-an-output-blurs). |
+| `blur`       | `{ when = "non-empty", scope = "output" }` | When an output blurs. See [When an output blurs](#when-an-output-blurs). |
 
 ```toml
 [compositor]
@@ -119,7 +119,7 @@ would have nothing to follow that the first does not already.
 
 | Key     | Default    | Meaning                                                                                |
 | ------- | ---------- | -------------------------------------------------------------------------------------- |
-| `when`  | `"focused"` | `"focused"`: the output holds the focused window. `"non-empty"`: the workspace it is showing holds at least one window, whether or not one is focused. |
+| `when`  | `"non-empty"` | `"focused"`: the output holds the focused window. `"non-empty"`: the workspace it is showing holds at least one window, whether or not one is focused. |
 | `scope` | `"output"` | `"output"`: each output answers for itself. `"global"`: every output blurs as soon as one of them answers yes. |
 
 ```toml
@@ -365,8 +365,8 @@ A compositor that pans the wallpaper continuously has no adjacent stop to measur
 
 An output blurs when the compositor drives it to, or when the control socket has asked for
 it; see [usage.md](usage.md#the-blur-signal). What the compositor drives it on is
-[`[compositor] blur`](#when-an-output-blurs), which by default is the output holding the
-focused window, so nothing focused anywhere leaves every output sharp.
+[`[compositor] blur`](#when-an-output-blurs), which by default is whether the output's
+active workspace holds any window.
 
 `radius` is measured in texels of the wallpaper texture, which is decoded at the buffer
 size times the deepest zoom. At rest one texel is one device pixel, so the configured

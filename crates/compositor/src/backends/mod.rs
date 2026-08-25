@@ -296,7 +296,8 @@ mod tests {
 
     #[test]
     fn an_output_may_blur_on_a_rule_of_its_own() {
-        let mut settings = parse(niri::NAME, r#"{"blur":{"scope":"global"}}"#).unwrap();
+        let mut settings =
+            parse(niri::NAME, r#"{"blur":{"when":"focused","scope":"global"}}"#).unwrap();
         settings
             .deserialize_output(
                 OutputId::new("DP-1"),
@@ -317,7 +318,11 @@ mod tests {
     /// configured apart must not be missed and the global settings must not be either.
     #[test]
     fn every_setting_in_play_includes_the_global_one() {
-        let mut scoped = Scoped::new(niri::Params::default());
+        let global = niri::Params {
+            blur: niri::Blur { when: niri::When::Focused, ..niri::Blur::default() },
+            ..niri::Params::default()
+        };
+        let mut scoped = Scoped::new(global);
         assert_eq!(scoped.all().count(), 1);
 
         let asks = niri::Params {

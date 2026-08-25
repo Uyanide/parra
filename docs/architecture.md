@@ -361,15 +361,15 @@ The two backends carry the keys separately, as they already carry `Axis`. One sp
 put focus and workspaces in `backends/mod.rs`, and the answers differ under it anyway: niri
 is asked what its tracker already holds, for the columns, while Hyprland has to be told.
 
-**Hyprland keeps a window map to answer an empty workspace, and only where one is asked
-for.** Its event stream reports a window opening, closing and being handed on, and never how
-many a workspace holds, so there is nothing to count without following each window from
-`j/clients` at connect. The alternative was asking `j/workspaces` when a window event
-arrives, which is a request on the event path and is what the seam below rules out.
+**Hyprland keeps a window map to answer an empty workspace, skipped only where every output
+opts out of it.** Its event stream reports a window opening, closing and being handed on,
+and never how many a workspace holds, so there is nothing to count without following each
+window from `j/clients` at connect. The alternative was asking `j/workspaces` when a window
+event arrives, which is a request on the event path and is what the seam below rules out.
 
 `[compositor]` is fixed for the life of a connection, so the backend reads its settings once
-and a file that never says `non-empty` neither asks for the snapshot nor keeps the map. The
-cold-start figures above hold unchanged for such a file.
+and decides then. `non-empty` is the default `when`, so the map is built unless a file sets
+`when = "focused"` globally with no output overriding it back.
 
 What the map leaves out is a special workspace drawn over the active one. `activespecial` is
 unparsed so that a scratchpad cannot pull the parallax to centre, and reading it here alone

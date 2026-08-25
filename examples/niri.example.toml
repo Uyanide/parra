@@ -43,7 +43,7 @@ horizontal = "none"
 #          "global"     every output blurs as soon as one of them answers yes
 #
 # What a blur looks like is `[blur]` below; this is when one happens.
-blur = { when = "focused", scope = "output" }
+blur = { when = "non-empty", scope = "output" }
 
 # One monitor can differ, inheriting whatever it leaves out:
 #

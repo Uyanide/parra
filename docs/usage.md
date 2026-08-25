@@ -307,11 +307,10 @@ Two of parra's effects have nothing to drive them here, and neither goes unsaid:
   daemon logs that nothing drives it when it connects. That is still doing its main job,
   which is leaving headroom for the parallax to travel through.
 
-Blur follows the focused window rather than the focused monitor, so a monitor showing an
-empty workspace stays sharp. A launcher or other layer surface taking the keyboard leaves no
-window focused either. Both are what `[compositor] blur` answers:
-`when = "non-empty"` blurs a monitor whose workspace holds windows regardless of the focus,
-and `scope = "global"` blurs every monitor together. See
+Blur defaults to whether a monitor's workspace holds any window, not whether it holds the
+focus, so a monitor with windows on it stays blurred after the focus leaves for another
+monitor or a launcher. `when = "focused"` switches to following the focus instead, and
+`scope = "global"` blurs every monitor together. See
 [config.md](config.md#when-an-output-blurs), or ask over the control socket as
 [the blur signal](#the-blur-signal) describes.
 
@@ -569,7 +568,7 @@ parra blur off --output DP-1
 _'output blurs'_ = _'the compositor drives this output to blur'_ **OR** _'blur signal is set for this output'_
 
 What the compositor drives it on is [`[compositor] blur`](config.md#when-an-output-blurs),
-which by default is the output holding the focused window.
+which by default is the output's active workspace holding any window.
 
 Command syntax and exit codes are in [cli.md](cli.md). The full protocol, every request
 and response, is in [control-protocol.md](control-protocol.md).

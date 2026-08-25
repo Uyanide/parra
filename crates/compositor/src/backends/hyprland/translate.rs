@@ -302,6 +302,7 @@ mod tests {
     use super::super::{Blur, Span};
     use super::*;
 
+    const FOCUSED: Blur = Blur { when: When::Focused, scope: Scope::Output };
     const NON_EMPTY: Blur = Blur { when: When::NonEmpty, scope: Scope::Output };
     const EVERYWHERE: Blur = Blur { when: When::Focused, scope: Scope::Global };
 
@@ -314,9 +315,10 @@ mod tests {
         tracker.apply(event);
     }
 
-    /// Five numbered workspaces, so the two the fixtures use sit at either end.
+    /// Five numbered workspaces, so the two the fixtures use sit at either end. Blurs on
+    /// the focus, which is what most of the fixtures below are actually about.
     fn settings() -> Scoped<Params> {
-        Scoped::new(Params { span: Span::Count(5), ..Params::default() })
+        Scoped::new(Params { span: Span::Count(5), blur: FOCUSED, ..Params::default() })
     }
 
     /// The same, on the blur rule given.
@@ -326,7 +328,7 @@ mod tests {
 
     fn named_settings(names: &[&str]) -> Scoped<Params> {
         let span = Span::Names(names.iter().map(|name| (*name).to_owned()).collect());
-        Scoped::new(Params { span, ..Params::default() })
+        Scoped::new(Params { span, blur: FOCUSED, ..Params::default() })
     }
 
     /// The two monitors this was developed against, as `j/monitors` reports them, with a

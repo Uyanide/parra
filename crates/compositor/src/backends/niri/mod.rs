@@ -63,8 +63,7 @@ pub struct Blur {
 }
 
 impl Blur {
-    /// What the daemon drove before either key existed.
-    const DEFAULT: Self = Self { when: When::Focused, scope: Scope::Output };
+    const DEFAULT: Self = Self { when: When::NonEmpty, scope: Scope::Output };
 }
 
 impl Default for Blur {
@@ -78,9 +77,9 @@ impl Default for Blur {
 #[serde(rename_all = "kebab-case")]
 pub enum When {
     /// It holds the focused window.
-    #[default]
     Focused,
     /// Its active workspace holds at least one window, whether or not one is focused.
+    #[default]
     NonEmpty,
 }
 
