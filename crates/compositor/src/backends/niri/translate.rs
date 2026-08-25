@@ -111,7 +111,7 @@ impl Tracker {
             .keys()
             .map(|output| {
                 let on = match settings.for_output(output).blur.when {
-                    When::Focus => focused.as_ref() == Some(output),
+                    When::Focused => focused.as_ref() == Some(output),
                     When::NonEmpty => self.occupied(output),
                 };
                 (output, on)
@@ -290,14 +290,14 @@ mod tests {
     use super::*;
     use crate::backends::niri::wire;
 
-    const FOCUS: Blur = Blur { when: When::Focus, scope: Scope::Output };
+    const FOCUSED: Blur = Blur { when: When::Focused, scope: Scope::Output };
     const NON_EMPTY: Blur = Blur { when: When::NonEmpty, scope: Scope::Output };
-    const EVERYWHERE: Blur = Blur { when: When::Focus, scope: Scope::Global };
+    const EVERYWHERE: Blur = Blur { when: When::Focused, scope: Scope::Global };
 
     const DEFAULTS: Params =
-        Params { vertical: Axis::Workspace, horizontal: Axis::None, blur: FOCUS };
+        Params { vertical: Axis::Workspace, horizontal: Axis::None, blur: FOCUSED };
     const BY_COLUMN: Params =
-        Params { vertical: Axis::Workspace, horizontal: Axis::Column, blur: FOCUS };
+        Params { vertical: Axis::Workspace, horizontal: Axis::Column, blur: FOCUSED };
 
     /// The same settings for every output, which is what a file with no per-output table
     /// resolves to.
@@ -478,7 +478,7 @@ mod tests {
         let mut tracker = populated();
         columns_with_gaps(&mut tracker);
         feed(&mut tracker, r#"{"WindowFocusChanged":{"id":9}}"#);
-        let swapped = Params { vertical: Axis::Column, horizontal: Axis::Workspace, blur: FOCUS };
+        let swapped = Params { vertical: Axis::Column, horizontal: Axis::Workspace, blur: FOCUSED };
 
         let drives = tracker.drives(&everywhere(swapped));
         assert_eq!(vertical_of(&drives, "DP-1"), 1.0, "the last of three columns");
@@ -554,7 +554,7 @@ mod tests {
     /// the same reason [`Axis`]'s are.
     #[test]
     fn every_blur_setting_prints_the_name_serde_reads() {
-        for when in [When::Focus, When::NonEmpty] {
+        for when in [When::Focused, When::NonEmpty] {
             let json = format!(r#"{{"blur":{{"when":"{when}"}}}}"#);
             let params: Params = serde_json::from_str(&json).expect("its own name should parse");
             assert_eq!(params.blur.when, when);

@@ -290,7 +290,7 @@ mod tests {
 
     #[test]
     fn an_unknown_key_inside_blur_names_itself() {
-        let error = parse(niri::NAME, r#"{"blur":{"wen":"focus"}}"#).unwrap_err();
+        let error = parse(niri::NAME, r#"{"blur":{"wen":"focused"}}"#).unwrap_err();
         assert!(error.to_string().contains("wen"), "{error}");
     }
 
@@ -309,7 +309,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(niri_params(&settings, "DP-1").blur.when, niri::When::NonEmpty);
-        assert_eq!(niri_params(&settings, "eDP-1").blur.when, niri::When::Focus);
+        assert_eq!(niri_params(&settings, "eDP-1").blur.when, niri::When::Focused);
         assert_eq!(niri_params(&settings, "eDP-1").blur.scope, niri::Scope::Global);
     }
 

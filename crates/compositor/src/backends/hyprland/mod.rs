@@ -79,7 +79,7 @@ pub struct Blur {
 
 impl Blur {
     /// What the daemon drove before either key existed.
-    const DEFAULT: Self = Self { when: When::Focus, scope: Scope::Output };
+    const DEFAULT: Self = Self { when: When::Focused, scope: Scope::Output };
 }
 
 impl Default for Blur {
@@ -94,7 +94,7 @@ impl Default for Blur {
 pub enum When {
     /// It holds the focused window.
     #[default]
-    Focus,
+    Focused,
     /// The workspace it is showing holds at least one window, whether or not one is
     /// focused.
     NonEmpty,
@@ -320,7 +320,7 @@ impl When {
     /// The spelling a configuration file uses, which is what serde reads.
     const fn as_str(self) -> &'static str {
         match self {
-            When::Focus => "focus",
+            When::Focused => "focused",
             When::NonEmpty => "non-empty",
         }
     }
@@ -702,7 +702,7 @@ mod tests {
     fn the_settings_print_the_spellings_serde_reads() {
         assert_eq!(
             Params::default().to_string(),
-            "vertical=none,horizontal=workspace,span=10,blur.when=focus,blur.scope=output"
+            "vertical=none,horizontal=workspace,span=10,blur.when=focused,blur.scope=output"
         );
 
         let named = Params {

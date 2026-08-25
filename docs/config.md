@@ -79,7 +79,7 @@ travels through.
 | ------------ | ------------------------------------ | -------------------------------------------------------------------------- |
 | `vertical`   | `"workspace"`                        | `"workspace"`, `"column"` or `"none"`.                                     |
 | `horizontal` | `"none"`                             | Same values. `"none"` leaves the axis pinned to its centre.                |
-| `blur`       | `{ when = "focus", scope = "output" }` | When an output blurs. See [When an output blurs](#when-an-output-blurs). |
+| `blur`       | `{ when = "focused", scope = "output" }` | When an output blurs. See [When an output blurs](#when-an-output-blurs). |
 
 ```toml
 [compositor]
@@ -100,7 +100,7 @@ monitor whose focused window is floating or fullscreen.
 | `vertical`   | `"none"`                               | `"workspace"` or `"none"`.                                                 |
 | `horizontal` | `"workspace"`                          | Same values. `"none"` leaves the axis pinned to its centre.                |
 | `span`       | `10`                                   | The workspaces the travel covers. See [The span](#the-span).               |
-| `blur`       | `{ when = "focus", scope = "output" }` | When an output blurs. See [When an output blurs](#when-an-output-blurs). |
+| `blur`       | `{ when = "focused", scope = "output" }` | When an output blurs. See [When an output blurs](#when-an-output-blurs). |
 
 ```toml
 [compositor]
@@ -119,7 +119,7 @@ would have nothing to follow that the first does not already.
 
 | Key     | Default    | Meaning                                                                                |
 | ------- | ---------- | -------------------------------------------------------------------------------------- |
-| `when`  | `"focus"`  | `"focus"`: the output holds the focused window. `"non-empty"`: the workspace it is showing holds at least one window, whether or not one is focused. |
+| `when`  | `"focused"` | `"focused"`: the output holds the focused window. `"non-empty"`: the workspace it is showing holds at least one window, whether or not one is focused. |
 | `scope` | `"output"` | `"output"`: each output answers for itself. `"global"`: every output blurs as soon as one of them answers yes. |
 
 ```toml
@@ -160,7 +160,7 @@ blur = { when = "non-empty", scope = "output" }
 
 [output."eDP-1".compositor]
 horizontal = "none"          # vertical stays "workspace"
-blur = { when = "focus" }    # scope stays "output"
+blur = { when = "focused" }  # scope stays "output"
 ```
 
 An object is merged key by key like any other part of the file, so an override names only

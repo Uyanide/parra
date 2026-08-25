@@ -241,7 +241,7 @@ impl Tracker {
             .iter()
             .map(|(output, workspace)| {
                 let on = match settings.for_output(output).blur.when {
-                    When::Focus => focused == Some(output),
+                    When::Focused => focused == Some(output),
                     When::NonEmpty => self.occupied(*workspace),
                 };
                 (output, on)
@@ -303,7 +303,7 @@ mod tests {
     use super::*;
 
     const NON_EMPTY: Blur = Blur { when: When::NonEmpty, scope: Scope::Output };
-    const EVERYWHERE: Blur = Blur { when: When::Focus, scope: Scope::Global };
+    const EVERYWHERE: Blur = Blur { when: When::Focused, scope: Scope::Global };
 
     fn output(name: &str) -> OutputId {
         OutputId::new(name)
