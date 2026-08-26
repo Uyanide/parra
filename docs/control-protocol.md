@@ -1,11 +1,25 @@
 # Control protocol
 
-The daemon listens on `$XDG_RUNTIME_DIR/parra-$WAYLAND_DISPLAY.sock`. The display name is
-part of the filename, so two compositors in one login session get one daemon each.
-`--socket PATH` overrides it.
+The daemon listens on `$XDG_RUNTIME_DIR/parra-$WAYLAND_DISPLAY.sock`. `--socket PATH`
+overrides it.
 
 One JSON value per line, request and response alike. The `parra` subcommands that send
 these are documented in [cli.md](cli.md).
+
+- [Control protocol](#control-protocol)
+  - [Conventions](#conventions)
+  - [Protocol version](#protocol-version)
+  - [Requests](#requests)
+    - [`set-wallpaper`](#set-wallpaper)
+    - [`restore-wallpaper`](#restore-wallpaper)
+    - [`reload-config`](#reload-config)
+  - [Responses](#responses)
+    - [Snapshot shape](#snapshot-shape)
+    - [The measurements](#the-measurements)
+  - [Events](#events)
+    - [What is reported](#what-is-reported)
+    - [Animation rules](#animation-rules)
+    - [What is not reported](#what-is-not-reported)
 
 ## Conventions
 
@@ -43,14 +57,14 @@ speaks M; restart the daemon` and exits 4. Restarting the daemon is the whole fi
 ### `set-wallpaper`
 
 Takes an absolute path; the `set` command canonicalizes one first (see [cli.md](cli.md)).
+
 The daemon checks that the path is a file while the client is still on the line, and
 decodes after the reply, so the request is answered immediately and whatever is on screen
 stays there until the new image is ready. An image that will not decode is reported in the
 log and on the [event stream](#events), and that output falls back to `[wallpaper]
-fallback` with the record left alone, so a drive that was not mounted yet recovers on its
-own.
+fallback` with the record left alone.
 
-`save` defaults to true. `false` shows the image for this session only, leaving the
+`save` defaults to `true`. `false` shows the image for this session only, leaving the
 recorded one alone.
 
 Setting the same path twice takes effect again, so an image edited in place is picked up.
@@ -58,8 +72,7 @@ Setting the same path twice takes effect again, so an image edited in place is p
 A `null` path empties the addressed slot, and that output is resolved again from the top:
 clearing one monitor's own wallpaper reveals the one every other monitor is on, and
 clearing that reveals `[wallpaper] fallback`. With nothing under it either, the output ends
-up showing nothing: what was on screen fades out over the configured transition and the
-surface is left transparent. A `null` output empties every slot at once, per-output ones
+up showing nothing. A `null` output empties every slot at once, per-output ones
 included. The `unset` command sends this.
 
 A wallpaper set this way is remembered across restarts; `[wallpaper] fallback` applies

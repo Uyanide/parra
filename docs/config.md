@@ -62,6 +62,11 @@ blur.radius = 16   # downscale stays 2
 
 ## Keys
 
+> [!NOTE]
+> A section's table owns its keys, their defaults and what they mean; the prose around it
+> owns behaviour. A TOML block appears only where the heading does not already say where
+> the keys sit, and shows placement rather than restating defaults.
+
 ### `[general]`
 
 > [!IMPORTANT]
@@ -108,13 +113,6 @@ travels through.
 | `horizontal` | `"none"`                                                       | Same values. `"none"` leaves the axis pinned to its centre.              |
 | `blur`       | `{ when = "non-empty", scope = "output", overview = "clear" }` | When an output blurs. See [When an output blurs](#when-an-output-blurs). |
 
-```toml
-[compositor]
-vertical = "workspace"
-horizontal = "none"
-blur = { when = "non-empty", scope = "output", overview = "clear" }
-```
-
 `"workspace"` follows the active workspace among that output's own workspaces; `"column"`
 follows the focused column of that output's active workspace. Each monitor scrolls by its
 own active workspace and that workspace's own column, so a monitor without the focus holds
@@ -129,14 +127,6 @@ monitor whose focused window is floating or fullscreen.
 | `horizontal` | `"workspace"`                              | Same values. `"none"` leaves the axis pinned to its centre.              |
 | `span`       | `10`                                       | The workspaces the travel covers. See [The span](#the-span).             |
 | `blur`       | `{ when = "non-empty", scope = "output" }` | When an output blurs. See [When an output blurs](#when-an-output-blurs). |
-
-```toml
-[compositor]
-vertical = "none"
-horizontal = "workspace"
-span = 10
-blur = { when = "non-empty", scope = "output" }
-```
 
 #### The span
 
@@ -234,9 +224,8 @@ where `"4"` sits. A workspace whose name is not a number sits centred either way
 | `scope` | `"output"`    | `"output"`: each output answers for itself. `"global"`: every output blurs as soon as one of them answers yes.                                         |
 
 ```toml
-[compositor.blur]
-when = "non-empty"
-scope = "output"
+[compositor]
+blur = { when = "non-empty", scope = "output" }
 ```
 
 Either of `when` and `scope` can be set per monitor, and each is read from the monitor it is
@@ -250,11 +239,6 @@ Niri also takes an `overview` key, which Hyprland's `blur` does not:
 | Key        | Default   | Meaning                                                                                                                                                                      |
 | ---------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `overview` | `"clear"` | `"clear"`: sharp for as long as the overview is open. `"blur"`: blurred for as long as it is open. `"follow"`: the overview does not change what `when` and `scope` decided. |
-
-```toml
-[compositor.blur]
-overview = "clear"
-```
 
 While the overview is open, `overview` short-circuits `when` and `scope`: `"blur"` or
 `"clear"` decides outright, `"follow"` leaves their answer standing.

@@ -1,9 +1,5 @@
 # File: $XDG_CONFIG_HOME/parra/niri.toml
 #
-# One file per compositor, and exactly one is read per run: the daemon detects
-# which compositor it is under and reads that one. Nothing here is shared with
-# another compositor's file.
-#
 # Every key below is optional and shown with its default.
 
 [general]
@@ -22,17 +18,16 @@ layer = "background"
 # `~`-prefixed, or relative to this file's directory.
 #
 # A wallpaper set with `parra set` is remembered across restarts and takes
-# precedence over this, so leaving it unset means the first start is blank and
-# every later one shows whatever was chosen last.
+# precedence over this, so leaving it unset means the first start is blank.
 #fallback = "~/pictures/wall.png"
 
+[compositor]
 # What niri position moves each parallax axis. It applies to every output.
 #
 #   "workspace"  the active workspace among that output's workspaces
 #   "column"     the focused column of that output's active workspace
 #   "none"       nothing, leaving the axis centred
-[compositor]
-vertical = "workspace"
+vertical   = "workspace"
 horizontal = "none"
 
 # When an output blurs, whether the outputs decide it one by one or together, and how
@@ -56,7 +51,7 @@ blur = { when = "non-empty", scope = "output", overview = "clear" }
 
 [scroll.vertical]
 # Fraction of the available travel to use, measured about the centre. 1 uses all of
-# it, 0 pins the image to the centre, which is how an axis is turned off from here.
+# it, 0 pins the image to the centre.
 travel = 1.0
 
 # Runs the axis the other way, so the first workspace or column sits where the last
@@ -76,11 +71,11 @@ duration-ms = 300
 easing = "out-cubic"
 
 [scroll.horizontal]
-travel = 1.0
-invert = false
-max-shift = 0.3
+travel      = 1.0
+invert      = false
+max-shift   = 0.3
 duration-ms = 300
-easing = "out-cubic"
+easing      = "out-cubic"
 
 [blur]
 # 0 disables blur entirely, skipping the bake.
@@ -96,23 +91,25 @@ tint = "#101010"
 tint-opacity = 0.5
 
 duration-ms = 300
-easing = "in-out-cubic"
+easing      = "in-out-cubic"
 
 [zoom]
 # Fraction of the image visible while the compositor is not asking for the wider
 # view of an output, which in niri is the overview. The rest is the headroom the
-# parallax scrolls through, so 1.0 means no scrolling at all.
-crop-ratio = 0.9
+# parallax scrolls through, so 1.0 means no scrolling at all in one of the axes.
+crop-ratio  = 0.9
 duration-ms = 300
-easing = "out-cubic"
+easing      = "out-cubic"
 
 [transition]
 # "fade" crossfades the outgoing wallpaper into the incoming one, holding both in
 # video memory until it finishes, and fades one out on its own when nothing replaces
-# it. "none" swaps outright and costs nothing.
-mode = "fade"
+# it.
+#
+# "none" swaps outright and costs nothing.
+mode        = "fade"
 duration-ms = 800
-easing = "in-out-cubic"
+easing      = "in-out-cubic"
 
 # Per-output overrides, keyed by connector name as the compositor reports it.
 # Any key left out is inherited from the sections above, `compositor` included.

@@ -1,8 +1,26 @@
 # CLI
 
-`parra` is the only binary. Every subcommand except `daemon` sends one request to the
-daemon's control socket and prints the reply; none of them touch a graphics stack. The
-wire format is in [control-protocol.md](control-protocol.md).
+`parra` is the only binary.
+
+Every subcommand except `daemon` sends one request to the daemon's control socket and
+prints the reply; none of them touch a graphics stack. The wire format is in
+[control-protocol.md](control-protocol.md).
+
+- [CLI](#cli)
+  - [Global flags](#global-flags)
+  - [Commands](#commands)
+    - [`parra daemon [--check] [--backend NAME]`](#parra-daemon---check---backend-name)
+    - [`parra set PATH [--output NAME] [--no-save]`](#parra-set-path---output-name---no-save)
+    - [`parra unset [--output NAME] [--no-save]`](#parra-unset---output-name---no-save)
+    - [`parra restore [--output NAME]`](#parra-restore---output-name)
+    - [`parra blur on|off [--output NAME]`](#parra-blur-onoff---output-name)
+    - [`parra state [--output NAME] [--json]`](#parra-state---output-name---json)
+    - [`parra events [--output NAME] [--json]`](#parra-events---output-name---json)
+    - [`parra reload`](#parra-reload)
+    - [`parra ping`](#parra-ping)
+  - [The blur signal](#the-blur-signal)
+  - [Exit codes](#exit-codes)
+  - [Examples](#examples)
 
 ## Global flags
 
@@ -90,8 +108,7 @@ wallpaper-failed /srv/broken.png
 config-reloaded
 ```
 
-It exits 1 when the daemon goes away -- a supervisor watches for that and starts it again
--- and 0 when whatever it was piped into stops reading.
+It exits 1 when the daemon goes away, and 0 when whatever it was piped into stops reading.
 
 ### `parra reload`
 
@@ -121,12 +138,12 @@ by default whether the output's active workspace holds any window.
 
 ## Exit codes
 
-| Code | Meaning                                        | Remedy                |
-| ---- | ---------------------------------------------- | --------------------- |
-| 0    | Success.                                       |                       |
-| 1    | Failed, and for `events` the daemon went away. |                       |
-| 3    | No daemon is listening.                        | Start the daemon.     |
-| 4    | The daemon speaks another protocol.            | Restart the daemon.   |
+| Code | Meaning                                        | Remedy              |
+| ---- | ---------------------------------------------- | ------------------- |
+| 0    | Success.                                       |                     |
+| 1    | Failed, and for `events` the daemon went away. |                     |
+| 3    | No daemon is listening.                        | Start the daemon.   |
+| 4    | The daemon speaks another protocol.            | Restart the daemon. |
 
 ## Examples
 

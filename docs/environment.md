@@ -1,16 +1,24 @@
 # Environment
 
+- [Environment](#environment)
+  - [Overview](#overview)
+  - [Where things go](#where-things-go)
+  - [Choosing a GPU](#choosing-a-gpu)
+  - [Logging](#logging)
+
+## Overview
+
 Several things the daemon needs are decided outside it. It reads those and adds no control
 of its own.
 
-| What                           | Decided by                                             | What the daemon does                                                                                    |
-| ------------------------------ | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| Rendering GPU and driver       | libglvnd and driver environment variables              | Nothing. It does not enumerate or select devices.                                                       |
-| Which GPU buffers come from    | The compositor, via `zwp_linux_dmabuf_v1` feedback     | Nothing. It does not allocate dmabufs.                                                                  |
-| Wayland connection             | `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`                   | Connects with a null display name and lets libwayland resolve it.                                       |
-| Compositor IPC socket          | Whatever the compositor exports: `NIRI_SOCKET` under niri, `HYPRLAND_INSTANCE_SIGNATURE` under Hyprland | Reads those variables. niri's names the socket outright; Hyprland's names a directory under `$XDG_RUNTIME_DIR/hypr/`, where the two socket names are the compositor's own and fixed. |
-| Where every file it owns lives | XDG Base Directory                                     | Derives paths from `XDG_CONFIG_HOME`, `XDG_RUNTIME_DIR`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` and `HOME`. |
-| Log level and filtering        | `RUST_LOG`                                             | Reads it. There is no config key for verbosity.                                                         |
+| What                           | Decided by                                         | What the daemon does                                                                                                                   |
+| ------------------------------ | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Rendering GPU and driver       | libglvnd and driver environment variables          | Nothing. It does not enumerate or select devices.                                                                                      |
+| Which GPU buffers come from    | The compositor, via `zwp_linux_dmabuf_v1` feedback | Nothing. It does not allocate dmabufs.                                                                                                 |
+| Wayland connection             | `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`               | Resolves the socket itself: an absolute `WAYLAND_DISPLAY` is used as-is, a relative one is joined onto an absolute `$XDG_RUNTIME_DIR`. |
+| Compositor IPC socket          | Environment variables set by the compositor        | Reads those variables.                                                                                                                 |
+| Where every file it owns lives | XDG Base Directory                                 | Derives paths from `XDG_CONFIG_HOME`, `XDG_RUNTIME_DIR`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` and `HOME`.                                |
+| Log level and filtering        | `RUST_LOG`                                         | Reads it. There is no config key for verbosity.                                                                                        |
 
 ## Where things go
 
@@ -32,9 +40,7 @@ original.
 
 The daemon selects no device. It renders the way any ordinary GUI application does,
 leaving device selection, buffer allocation and cross-GPU import to the EGL implementation
-and the compositor, so a machine whose monitors hang off two different DRM devices needs
-no configuration. See
-[architecture.md](architecture.md#choosing-a-gpu-is-not-part-of-this).
+and the compositor.
 
 To pin it somewhere specific, set the same variables you would for any other GUI
 application. Some combination of:
