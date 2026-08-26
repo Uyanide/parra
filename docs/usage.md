@@ -12,7 +12,7 @@
       - [Match animations](#match-animations)
       - [Autostart](#autostart)
     - [Hyprland](#hyprland)
-      - [Declare the span](#declare-the-span)
+      - [Workspace travel](#workspace-travel)
       - [Match animations](#match-animations-1)
       - [What Hyprland does not report](#what-hyprland-does-not-report)
       - [Start it at login](#start-it-at-login)
@@ -253,40 +253,18 @@ spawn-at-startup "parra" "daemon"
 All of this goes in `$XDG_CONFIG_HOME/hypr/hyprland.lua`, or `~/.config/hypr/hyprland.lua`
 if that variable is unset, or any file it requires.
 
-#### Declare the span
+#### Workspace travel
 
-Hyprland numbers its workspaces across monitors and creates them as they are used, so
-parra cannot count them; instead a `span` in `~/.config/parra/hyprland.toml` declares
-which workspaces the wallpaper travels through, `"1"` through `"10"` by default:
+Parra follows Hyprland's live positive workspace ids automatically. For each monitor it
+sorts that monitor's current ids numerically and spreads them evenly across the wallpaper
+travel. Sparse global ids need no configuration: workspaces `1`, `3`, and `8` on one monitor
+become its first, middle, and last stops regardless of ids owned by another monitor.
 
-```toml
-[compositor]
-span = 10
-```
+Creating, destroying, or moving a workspace updates the stops immediately. A workspace opened
+by name sits centred, being outside the numeric row.
 
-With more than one monitor, give every output the workspaces it actually shows, and pin
-them there so Hyprland stops moving them between monitors:
-
-```toml
-[output."eDP-1".compositor]
-span = ["6-8"]
-```
-
-```lua
-hl.workspace_rule({ workspace = 6, monitor = "eDP-1", persistent = true })
-hl.workspace_rule({ workspace = 7, monitor = "eDP-1", persistent = true })
-hl.workspace_rule({ workspace = 8, monitor = "eDP-1", persistent = true })
-```
-
-Named workspaces go into the span by name, in travel order:
-
-```toml
-[compositor]
-span = ["browser", "code", "mail"]
-```
-
-What `"6-8"` stands for, where a workspace outside the span lands, and everything else
-about it is in [config.md](config.md#the-span).
+A special workspace is drawn over the workspace its monitor is showing rather than in place
+of it, so opening one leaves the wallpaper where that workspace put it.
 
 #### Match animations
 

@@ -234,18 +234,33 @@ mod tests {
     }
 
     #[test]
-    fn a_hyprland_output_reads_the_span_until_it_says_otherwise() {
-        let mut settings = parse(hyprland::NAME, r#"{"span":5}"#).unwrap();
-        settings
-            .deserialize_output(
-                OutputId::new("DP-1"),
-                &mut serde_json::Deserializer::from_str(r#"{"span":["6","7","8"]}"#),
-            )
-            .unwrap();
+    fn removed_hyprland_span_is_rejected() {
+        let error = parse(hyprland::NAME, r#"{"span":5}"#).unwrap_err();
+        assert!(error.to_string().contains("span"), "{error}");
+    }
 
-        let names = ["6", "7", "8"].map(str::to_owned).to_vec();
-        assert_eq!(hyprland_params(&settings, "DP-1").span, hyprland::Span::Names(names));
-        assert_eq!(hyprland_params(&settings, "eDP-1").span, hyprland::Span::Count(5));
+    #[test]
+    fn hyprland_axes_and_blur_inherit_per_output() {
+        let mut settings = parse(
+            hyprland::NAME,
+            r#"{"vertical":"workspace","blur":{"when":"focused","scope":"global"}}"#,
+        )
+        .unwrap();
+        settings.deserialize_output(
+            OutputId::new("DP-1"),
+            &mut serde_json::Deserializer::from_str(
+                r#"{"vertical":"none","horizontal":"none","blur":{"when":"non-empty","scope":"global"}}"#,
+            ),
+        ).unwrap();
+        let local = hyprland_params(&settings, "DP-1");
+        let global = hyprland_params(&settings, "eDP-1");
+        assert_eq!(local.vertical, hyprland::Axis::None);
+        assert_eq!(local.horizontal, hyprland::Axis::None);
+        assert_eq!(local.blur.when, hyprland::When::NonEmpty);
+        assert_eq!(local.blur.scope, hyprland::Scope::Global);
+        assert_eq!(global.vertical, hyprland::Axis::Workspace);
+        assert_eq!(global.horizontal, hyprland::Axis::Workspace);
+        assert_eq!(global.blur.when, hyprland::When::Focused);
     }
 
     #[test]
@@ -262,14 +277,6 @@ mod tests {
         assert_eq!(reported.len(), 1);
         assert_eq!(reported[0].0, &OutputId::new("DP-1"));
         assert!(reported[0].1.contains("vertical=workspace"), "{}", reported[0].1);
-    }
-
-    /// A span of nothing has nowhere to travel, and reading it as a centred axis would
-    /// hide the typo rather than report it.
-    #[test]
-    fn an_empty_hyprland_span_is_refused() {
-        assert!(parse(hyprland::NAME, r#"{"span":0}"#).is_err());
-        assert!(parse(hyprland::NAME, r#"{"span":[]}"#).is_err());
     }
 
     /// niri's own second axis, which Hyprland has no position for.

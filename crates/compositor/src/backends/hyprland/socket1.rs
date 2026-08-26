@@ -11,15 +11,14 @@ const TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Asks one question and hangs up.
 ///
-/// Opened and closed around every request rather than kept, because the compositor serves
-/// this socket strictly one connection at a time: a connection held open blocks every other
-/// request to it, and the compositor's own handling of them, until its timeout elapses.
-/// Measured at three seconds of a wedged compositor for a connection held silent for three,
-/// against eight milliseconds for the same request unobstructed.
+/// Opened and closed around every request rather than kept: this socket is served one
+/// connection at a time, so one held open blocks every other client of it.
 ///
-/// Which is the other half of why this is only ever asked at cold start and when a monitor
-/// is left showing something no event stated. Nothing on the event path needs it, so no
-/// burst of compositor activity can turn into a queue of requests here.
+/// Measured against Hyprland 0.56:
+///
+/// - Three seconds of a wedged compositor for a connection held silent for three.
+/// - 0.02 ms for one answer, and 0.05 ms median for the monitor and workspace pair a
+///   resync asks for, taken with the compositor switching workspaces throughout.
 pub fn ask(socket: &Path, request: &str, backend: &'static str) -> Result<String, BackendError> {
     let io_error = |source| BackendError::Io { backend, source };
 

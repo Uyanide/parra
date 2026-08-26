@@ -385,8 +385,8 @@ whether this output should be blurred -- so what `[compositor] blur` changes is 
 a backend asks before stating one. `when` picks between the output holding the focused
 window and the workspace it shows holding anything at all; `scope` picks between an output
 answering for itself and every output answering together. Both are spelled in focus and
-workspaces, which is what puts them in the backend's own section beside `span` rather than
-in the shared parameters, and `domain` learns neither word.
+workspaces, which puts them in the backend's own section rather than in the shared
+parameters, and `domain` learns neither word.
 
 Set per output, `when` is answered by the output it is set on and `scope` is read by the
 output reading it, which is why every output's answer is taken before any of them is driven.
@@ -409,8 +409,9 @@ overview to name, so its `Blur` has no third field, the same way its `Axis` has 
 **Hyprland keeps a window map to answer an empty workspace, skipped only where every output
 opts out of it.** Its event stream reports a window opening, closing and being handed on,
 and never how many a workspace holds, so there is nothing to count without following each
-window from `j/clients` at connect. The alternative was asking `j/workspaces` when a window
-event arrives, which is a request on the event path and is what the seam below rules out.
+window from `j/clients` at connect. The alternative was asking `j/workspaces` on every window
+event, which trades a map costing nothing per event for a request on the busiest path there
+is; what a snapshot is worth asking for is weighed further below.
 
 `[compositor]` is fixed for the life of a connection, so the backend reads its settings once
 and decides then. `non-empty` is the default `when`, so the map is built unless a file sets
@@ -441,40 +442,38 @@ curve could only ever match one of the two. Which niri animation each pairs with
 [usage.md](usage.md#match-animations), and which Hyprland one in
 [usage.md](usage.md#match-animations-1).
 
-**A compositor with no position to report declares one instead.** Hyprland only names its
-workspaces: they are global rather than per monitor, and it creates and destroys them as
-they are used, so there is nothing it can be asked for that answers where a monitor sits.
-`[compositor] span` in its own file is the answer, and it is a backend key rather than a
-shared one because it is a fact about that compositor and no other. The backend turns a
-name into a `Stop` before anything leaves it, so the ceiling above holds: `domain` never
-learns the word workspace, and nothing downstream can tell the two compositors apart.
+**Hyprland derives a position from its live workspace topology.** Its IPC reports every
+workspace's numeric id and monitor ownership. The backend groups ordinary positive ids by
+monitor, sorts each group numerically, and normalizes the active workspace's exact index to
+a `Stop`. The conversion remains behind the backend boundary: `domain` never learns the
+word workspace, and nothing downstream can tell the two compositors apart.
 
-Counting the live workspaces instead was the alternative, and it is worse in a way that has
-nothing to do with the boundary: the travel would change length whenever a workspace
-appeared or went away, moving the wallpaper with no user action behind it. A workspace the
-span does not list still has to land somewhere, which is why a numbered span clamps to its
-nearest entry rather than centring: centre is a position like any other, and in
-`["2", "4", "6"]` it is exactly where `"4"` sits.
+Topology mutation changes that coordinate space immediately. Creating, destroying, or moving
+a workspace can change another active workspace's normalized position or stride even when
+that monitor did not switch, and every event emits the recalculated drives without debounce.
 
-Distance alone leaves one case open, and only history can settle it. Two entries equally far
-off -- `"4"` between `"3"` and `"5"` -- go to whichever is nearer the workspace the monitor
-was showing before, so the wallpaper holds its side of the gap instead of crossing it on the
-way out and crossing back on the way home. The price is a position that is not a function of
-the compositor's state alone: the backend remembers the workspace each monitor came from,
-and a daemon started while a monitor already sits in a gap has nothing behind it to read and
-falls back to the lower-numbered entry. The memory and the fallback both stay inside the
-one tie the arithmetic cannot answer, and neither reaches above the `Stop` the backend
-emits.
+This section used to argue the other way, and against counting live workspaces in
+particular, on the grounds that the travel would change length whenever one appeared or went
+away and move the wallpaper with no user action behind it. Two things answer that:
 
-**The written order of a span decides where a stop sits and nothing else.** Reading it into
-the answer as well would place workspace `"4"` differently under `["3", "1", "5"]` and
-`["5", "1", "3"]`, which describe the same three stops, so the fallback goes by number and
-a workspace listed twice is refused outright -- two stops carrying one number cannot be told
-apart, and `"1"` and `"01"` are one number. What is left is an answer that depends on the
-set of stops and the workspace behind it, and on nothing about how either was typed. The
-thousand-workspace ceiling is a separate matter: it is there so a mistyped range is refused
-instead of expanded, and a span that long already moves the wallpaper by about a pixel per
-workspace.
+- The count is per monitor. `j/workspaces` names the monitor each workspace is on, so churn
+  on one monitor leaves every other monitor's row where it was.
+- Within one monitor, a workspace is created by switching to it and destroyed by leaving it,
+  so the length change and the position change arrive in one burst and resolve to one target.
+
+What survives is a workspace a rule opens on a monitor nobody is watching, which moves that
+monitor's wallpaper alone. It is a smaller price than the setting it replaced: a declared
+span was the only thing here a user had to keep in step with the compositor by hand, and it
+could not describe a workspace renumbered underneath it.
+
+Named and special workspaces have negative ids and do not travel. An active negative id, an
+unknown active id, and a topology with fewer than two usable workspaces all give
+`Stop::CENTRED`. A special workspace reaches none of that: drawn over the workspace a monitor
+is showing rather than in place of it, it never becomes what that monitor reports as active,
+and the deliberate half of the same behaviour is the unparsed `activespecial` above.
+
+Records are kept for the ids that do not travel, so rename, movement, window identity, and
+destruction events still join on them.
 
 **A channel a compositor cannot drive is left undriven, not faked.** Hyprland reports no
 wider view of an output, so its backend never emits `ZoomedOut` and the channel stays where
@@ -583,23 +582,30 @@ That holds only while the new backend fits the four channels above. One that nee
 changes `domain` first and then everything downstream of it, which is what happened the
 last time this was tried. The ceiling is written down here rather than promised away.
 
-Hyprland was the second attempt and the test of it, and it fit. What it has that niri does
-not is a declared span, which turned out to be a setting rather than a channel: it belongs
-to one backend, it is read where that backend's other settings are, and the position it
-produces leaves as the same `Stop` any other compositor reports. The first attempt put it in
-`domain` and grew a `Workspace` vocabulary to carry it, which is the shape this seam exists
-to avoid.
+Hyprland was the second attempt and the test of it, and it fit. Its backend-owned live
+workspace model produces the same `Stop` any other compositor reports. The first attempt put
+that vocabulary in `domain` and grew a `Workspace` type to carry it, which is the shape this
+seam exists to avoid.
 
-A backend that has to ask questions asks them sparingly. Hyprland's event socket carries
-changes only and never restates the world, so its backend reads a snapshot over the request
-socket at every connect, and again for the three events that leave a monitor showing
-something nothing stated: a workspace moved to another monitor, a workspace renumbered, and
-a monitor plugged in. Nothing on the event path asks, so no burst of compositor activity can
-become a queue of requests. That socket serves one connection at a time, and holding one
-open blocks every other client of it and the compositor's own handling of them: measured at
-three seconds of a wedged compositor for a connection held silent for three, against eight
-milliseconds for the same request unobstructed. So it is opened and closed around each
-request rather than kept.
+A backend that has to ask questions asks the ones it cannot answer. Hyprland's event socket
+carries changes only and never restates the world, so its backend reads a snapshot over the
+request socket at every connect, and again for each event that leaves a workspace's monitor
+unstated: created, moved, renumbered, and a monitor plugged or unplugged. Activating a
+workspace is not one of those. It names the focused monitor by being what it is, so the
+event path's own hot case never asks.
+
+Creating one earns its snapshot rather than a guess. The event names the workspace and not
+its monitor, and while nearly all of them open on the focused monitor, a workspace rule can
+bind one anywhere: guessing would put it in the wrong monitor's row, shortening one and
+lengthening the other, with nothing afterwards to correct either. The cost is what decides
+this and it was measured rather than assumed -- the pair of requests a snapshot makes takes
+0.05 ms with the compositor switching workspaces throughout, on a thread that draws no
+frames, against a switch every few hundred milliseconds at worst.
+
+The connection is opened and closed around each request rather than kept, because the socket
+serves one at a time and holding one open blocks every other client of it and the
+compositor's own handling of them: three seconds of a wedged compositor, measured, for a
+connection held silent for three.
 
 The backend's own settings are its `Params` type, deserialized from the `[compositor]`
 table. `config` carries that table across without reading it, and `compositor` takes a

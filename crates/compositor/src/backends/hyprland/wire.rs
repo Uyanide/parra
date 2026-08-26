@@ -219,12 +219,14 @@ pub struct WorkspaceRef {
     pub name: String,
 }
 
-/// What `j/workspaces` says. Read once at cold start for the names, which the event stream
-/// then keeps current by itself.
+/// What `j/workspaces` says. The monitor owns the workspace topology; active workspace
+/// records from `j/monitors` repair it when this field is absent.
 #[derive(Debug, Deserialize)]
 pub struct Workspace {
     pub id: i64,
     pub name: String,
+    #[serde(default)]
+    pub monitor: Option<String>,
 }
 
 /// What `j/clients` says, and only the fields this daemon reads.

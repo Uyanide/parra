@@ -26,7 +26,7 @@ layer = "background"
 [compositor]
 # What Hyprland position moves each parallax axis. It applies to every output.
 #
-#   "workspace"  the workspace that output is showing, placed by `span` below
+#   "workspace"  the workspace that output is showing in its live numeric topology
 #   "none"       nothing, leaving the axis centred
 #
 # Sideways by default, because that is the way Hyprland moves a workspace
@@ -44,25 +44,6 @@ horizontal = "workspace"
 # What a blur looks like is `[blur]` below; this is when one happens.
 blur = { when = "non-empty", scope = "output" }
 
-# The workspaces the travel covers, in the order it travels through them. A
-# number means the workspaces named "1" through "N"; a list names them instead,
-# and an entry like "3-6" is the range from "3" to "6":
-#
-#   span = ["browser", "code", "mail"]
-#   span = ["1-4", "mail"]
-#
-# A workspace outside a numbered span lands on the nearest one in it; outside
-# a named span it sits centred. See docs/config.md.
-span = 10
-
-# One monitor can differ, inheriting whatever it leaves out.
-#
-# Hyprland numbers workspaces across every monitor rather than per monitor, so
-# a second monitor usually wants the ones it actually shows:
-#
-# [output."eDP-1".compositor]
-# span = ["6-8"]
-
 [scroll.vertical]
 # Fraction of the available travel to use, measured about the centre. 1 uses all of
 # it, 0 pins the image to the centre.
@@ -72,7 +53,7 @@ travel = 1.0
 # otherwise would. Measured about the centre, so a centred axis does not move.
 invert = false
 
-# Furthest the image may move between two adjacent stops of the span, in screen
+# Furthest the image may move between two adjacent workspace stops, in screen
 # heights here and screen widths on the horizontal axis. 0 lifts the cap. Only a
 # wallpaper much taller or wider than the screen ever has a stop long enough to
 # reach this.

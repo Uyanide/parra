@@ -9,10 +9,6 @@
     - [`[compositor]`](#compositor)
       - [Under niri](#under-niri)
       - [Under Hyprland](#under-hyprland)
-      - [The span](#the-span)
-        - [Syntax](#syntax)
-        - [One span per monitor](#one-span-per-monitor)
-        - [Where an unlisted workspace lands](#where-an-unlisted-workspace-lands)
       - [When an output blurs](#when-an-output-blurs)
       - [Override per monitor](#override-per-monitor)
     - [`[scroll.vertical]` and `[scroll.horizontal]`](#scrollvertical-and-scrollhorizontal)
@@ -125,94 +121,15 @@ monitor whose focused window is floating or fullscreen.
 | ------------ | ------------------------------------------ | ------------------------------------------------------------------------ |
 | `vertical`   | `"none"`                                   | `"workspace"` or `"none"`.                                               |
 | `horizontal` | `"workspace"`                              | Same values. `"none"` leaves the axis pinned to its centre.              |
-| `span`       | `10`                                       | The workspaces the travel covers. See [The span](#the-span).             |
 | `blur`       | `{ when = "non-empty", scope = "output" }` | When an output blurs. See [When an output blurs](#when-an-output-blurs). |
 
-#### The span
+Hyprland's positive workspace ids are grouped by monitor and sorted numerically, and the
+workspace a monitor is showing sits at its place in that monitor's own row. Creating,
+destroying or moving a workspace changes the positions and the strides at once.
 
-Hyprland only names its workspaces. They are global rather than per monitor, carry no
-order, and are created and destroyed as they are used. So there is no position it can
-report. `span` declares the travel instead.
-
-##### Syntax
-
-A number is shorthand for the workspaces named `"1"` through `"N"`:
-
-```toml
-[compositor]
-span = 10
-```
-
-A list names them in the order they should be travelled through, which is what workspaces
-carrying names need:
-
-```toml
-[compositor]
-span = ["browser", "code", "mail", "3-6", "10"]
-```
-
-An entry written `"3-6"` is the range `"3"` to `"6"`, both ends included, and expands where
-it stands. Written backwards it counts down, so `["9-7", "mail"]` travels `"9"`, `"8"`,
-`"7"`, `"mail"`. A hyphen anywhere but between digits belongs to a name, which leaves
-`"my-project"` and `"-1"` single workspaces.
-
-Workspaces are visited in the order they are listed, not in the sorted order:
-`["3", "1", "5"]` puts `"1"` in the middle. That written order fixes only where each stop
-sits; how an unlisted one is placed is in
-[Where an unlisted workspace lands](#where-an-unlisted-workspace-lands).
-
-No workspace may be listed twice, counting `"1"` and `"01"` as the same one, and a span
-covers at most 1000 of them.
-
-##### One span per monitor
-
-It is per output like everything else. Hyprland numbers workspaces across every monitor
-rather than restarting on each, so a second monitor shows only part of the range and
-travels through only part of its wallpaper. Give it the workspaces it actually shows:
-
-```toml
-[compositor]
-span = 5                       # everywhere, unless said otherwise below
-
-[output."HDMI-A-1".compositor]
-span = ["6", "7", "8"]         # the three this one actually shows
-```
-
-A count is shorthand for `"1"` through `"N"`, so `span = 3` there would
-mean the workspaces `"1"`, `"2"` and `"3"`. It does not mean "three workspaces on this
-monitor". Anything else has to be named.
-
-The span is one coordinate space, and sharing it is what makes a monitor use only part of
-its travel. Leave `"1"` through `"5"` global while one monitor only ever shows `"2"`, and
-that monitor sits at 25% forever; a monitor showing `"1"`, `"3"` and `"4"` steps 0%, 50%,
-75% rather than evenly. Declaring each monitor's own workspaces is what gives it the whole
-travel and even steps between them.
-
-Two monitors may name the same workspace, which is allowed and often right: Hyprland can
-put it on either. Only the monitor actually showing it ever matches, so the two cannot
-disagree.
-
-##### Where an unlisted workspace lands
-
-A workspace the span does not list still has to land somewhere. Where every entry in the
-span is a number it lands on the nearest of them by number, which also clamps anything past
-either end. Two entries equally far off are settled by the workspace the monitor was showing
-before, the nearer of the two to that one winning:
-
-| `span`            | Was showing | Workspace | Sits at | Why                                 |
-| ----------------- | ----------- | --------- | ------- | ----------------------------------- |
-| `10`              | anything    | `"14"`    | `"10"`  | Past the last, so clamped to it     |
-| `["1", "3", "6"]` | anything    | `"5"`     | `"6"`   | Nearer `"6"` than `"3"`             |
-| `["3", "5"]`      | `"1"`       | `"4"`     | `"3"`   | Equally far; `"3"` is nearer `"1"`  |
-| `["3", "5"]`      | `"10"`      | `"4"`     | `"5"`   | Equally far; `"5"` is nearer `"10"` |
-| `["3", "5"]`      | nothing yet | `"4"`     | `"3"`   | Equally far, so the lower number    |
-
-The last row covers the daemon's first update after it starts, and a monitor whose
-earlier workspace has a name that no number describes.
-
-Where the span carries names there is no distance to measure, so an unlisted workspace sits
-centred instead. Centre is a position like any other: with `["2", "4", "6"]` it is exactly
-where `"4"` sits. A workspace whose name is not a number sits centred either way.
+A workspace opened by name sits centred, as does a monitor showing fewer than two positive
+workspaces. A special workspace is drawn over the workspace a monitor is showing rather than
+in place of it, so opening one leaves the axis where that workspace put it.
 
 #### When an output blurs
 
@@ -315,16 +232,16 @@ workspaces one switch drags the image over a screen height in 300 ms.
 
 `max-shift` states that distance in units the screen supplies. It is measured in screen
 heights on the vertical axis and screen widths on the horizontal one, and caps how far the
-image moves between two **adjacent** stops -- the next workspace along, the next column,
-or the next entry in a Hyprland [span](#the-span).
+image moves between two **adjacent** stops -- the next workspace along, or the next column.
 
 ```toml
 [scroll.vertical]
 max-shift = 0.3   # one workspace along never moves the image more than a third of a screen
 ```
 
-A jump across several stops at once, which a niri workspace switch or a jump across a
-Hyprland span can be, moves that many times the cap.
+A jump across several stops at once moves that many times the cap. A niri workspace switch
+can be one, and so can a Hyprland switch to a workspace numbered past every other on that
+monitor: it joins the row at the far end, so one keystroke crosses the whole of it.
 
 More stops loosen the cap. One stop is `1 / (stops - 1)` of the travel, so the more stops
 an axis has the shorter each one already is. On the wallpaper above, at `max-shift = 0.3`:

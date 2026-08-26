@@ -1,6 +1,6 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 
-use domain::OutputId;
+use domain::{OutputId, Stop};
 
 use super::wire::{self, Event};
 use super::{Params, Scope, When};
@@ -8,28 +8,24 @@ use crate::backends::Scoped;
 use crate::event::Drive;
 
 /// Everything the backend must remember to turn Hyprland's report into channel positions.
-///
-/// The compositor reports a workspace change without saying where, and reports the focused
-/// monitor with a workspace id but no name. Holding both halves so either event can
-/// complete the other is this file's entire job; where a name then sits in the travel is
-/// the span's to answer.
 #[derive(Debug, Default)]
 pub struct Tracker {
     /// Monitor to the id of the workspace it is showing.
     monitors: BTreeMap<OutputId, i64>,
-    /// Monitor to the name of the workspace it was showing before this one, which tells
-    /// two stops equally far from an unlisted workspace apart. By name rather than by id:
-    /// the workspace being left is usually destroyed on the way out, taking its id's name.
-    previous: HashMap<OutputId, String>,
-    /// Workspace id to name. Kept because a workspace is placed in the travel by name,
-    /// while half the events identify one only by id.
-    names: HashMap<i64, String>,
+    /// Workspace id to its current name and monitor ownership.
+    workspaces: HashMap<i64, Workspace>,
     focused: Option<OutputId>,
     /// Workspace the focused window is on, which the monitor showing it is read from.
     focused_workspace: Option<i64>,
     /// Window address to the workspace it is on, which is what says whether a workspace is
     /// empty. `None` where nothing asks; see [`Tracker::new`].
     windows: Option<HashMap<String, i64>>,
+}
+
+#[derive(Debug)]
+struct Workspace {
+    name: String,
+    monitor: Option<OutputId>,
 }
 
 impl Tracker {
@@ -60,14 +56,13 @@ impl Tracker {
         window: wire::ActiveWindow,
         clients: Vec<wire::Client>,
     ) {
-        self.names = workspaces.into_iter().map(|w| (w.id, w.name)).collect();
+        self.replace_topology(monitors, workspaces);
         if let Some(windows) = &mut self.windows {
             *windows = clients
                 .into_iter()
                 .map(|client| (wire::address(&client.address), client.workspace.id))
                 .collect();
         }
-        self.resync(monitors);
         self.focused_workspace = self.holding(&window);
     }
 
@@ -95,40 +90,56 @@ impl Tracker {
         self.monitors.get(focused).copied().filter(|id| *id != UNSET)
     }
 
-    /// Replaces what each monitor is showing, leaving the focused window alone.
-    ///
-    /// Narrower than a full seed because it answers one question, and the answer carries
-    /// the names of the active workspaces with it, so nothing else has to be asked for.
-    pub fn resync(&mut self, monitors: Vec<wire::Monitor>) {
-        self.focused = None;
-        let mut listed = BTreeSet::new();
-
-        for monitor in monitors {
-            let id = OutputId::new(monitor.name);
-            if monitor.focused {
-                self.focused = Some(id.clone());
-            }
-            self.names.insert(monitor.active_workspace.id, monitor.active_workspace.name);
-            listed.insert(id.clone());
-            self.show(id, monitor.active_workspace.id);
-        }
-
-        // Dropping what the answer left out rather than starting from nothing, so a monitor
-        // it does still list keeps the workspace it was showing before this.
-        self.monitors.retain(|id, _| listed.contains(id));
-        self.previous.retain(|id, _| listed.contains(id));
+    /// Replaces compositor-owned monitor and workspace topology, leaving window state alone.
+    pub fn resync(&mut self, monitors: Vec<wire::Monitor>, workspaces: Vec<wire::Workspace>) {
+        self.replace_topology(monitors, workspaces);
     }
 
-    /// Records what a monitor is showing, keeping what it was showing until then.
+    fn replace_topology(&mut self, monitors: Vec<wire::Monitor>, workspaces: Vec<wire::Workspace>) {
+        self.focused = None;
+        self.monitors.clear();
+        self.workspaces = workspaces
+            .into_iter()
+            .map(|workspace| {
+                let monitor = workspace.monitor.map(OutputId::new);
+                (workspace.id, Workspace { name: workspace.name, monitor })
+            })
+            .collect();
+
+        for monitor in monitors {
+            let output = OutputId::new(monitor.name);
+            if monitor.focused {
+                self.focused = Some(output.clone());
+            }
+            self.workspaces.insert(
+                monitor.active_workspace.id,
+                Workspace { name: monitor.active_workspace.name, monitor: Some(output.clone()) },
+            );
+            self.monitors.insert(output, monitor.active_workspace.id);
+        }
+    }
+
+    /// Records what a workspace is called, keeping the monitor it is already known to be on.
+    ///
+    /// The events carrying a name carry no monitor. One nothing has placed yet falls back to
+    /// the focused monitor, which is where a workspace becoming active is.
+    ///
+    /// Letting that fallback replace a known answer would leave two rows wrong at once, and
+    /// nothing short of a snapshot would put them back.
+    fn record(&mut self, id: i64, name: String) {
+        match self.workspaces.get_mut(&id) {
+            Some(workspace) => workspace.name = name,
+            None => {
+                self.workspaces.insert(id, Workspace { name, monitor: self.focused.clone() });
+            }
+        }
+    }
+
     fn show(&mut self, output: OutputId, workspace: i64) {
-        let showing = self.monitors.get(&output).copied();
-        if showing == Some(workspace) {
-            return;
+        self.monitors.insert(output.clone(), workspace);
+        if let Some(record) = self.workspaces.get_mut(&workspace) {
+            record.monitor = Some(output);
         }
-        if let Some(name) = showing.and_then(|id| self.names.get(&id)).cloned() {
-            self.previous.insert(output.clone(), name);
-        }
-        self.monitors.insert(output, workspace);
     }
 
     /// Folds one compositor event into the tracked state.
@@ -142,7 +153,6 @@ impl Tracker {
             Event::MonitorRemoved { name } => {
                 let id = OutputId::new(name);
                 self.monitors.remove(&id);
-                self.previous.remove(&id);
                 if self.focused.as_ref() == Some(&id) {
                     self.focused = None;
                 }
@@ -152,10 +162,10 @@ impl Tracker {
                 self.show(id.clone(), workspace);
                 self.focused = Some(id);
             }
-            // Said of the focused monitor, which is the only one a workspace change can be
-            // about: switching on an unfocused monitor focuses it first.
+            // Taken to be the focused monitor. Every path that activates a workspace on
+            // another one moves it there too, and moving asks for a snapshot.
             Event::WorkspaceActive { id, name } => {
-                self.names.insert(id, name);
+                self.record(id, name);
                 if let Some(focused) = self.focused.clone() {
                     // A window on the arriving workspace takes the focus before this says
                     // where it landed, so a focus on the one being left moves with it.
@@ -167,7 +177,7 @@ impl Tracker {
                 }
             }
             Event::WorkspaceCreated { id, name } | Event::WorkspaceRenamed { id, name } => {
-                self.names.insert(id, name);
+                self.record(id, name);
             }
             // Taken to be on what the monitor holding the focus is showing, corrected by a
             // workspace change arriving after. A monitor the cursor reaches empty reports none.
@@ -192,15 +202,12 @@ impl Tracker {
                     windows.insert(address, workspace);
                 }
             }
-            // Deliberately nothing. Whether the workspace became the active one on the
-            // monitor it landed on depends on where the focus was at the time, so the
-            // backend asks what both monitors ended up showing instead of guessing.
-            Event::WorkspaceMoved { .. } => {}
-            // The name follows the new id unless the workspace had been renamed by hand,
-            // and the event says which neither way. The backend asks alongside this too,
-            // so all that is left here is dropping what the old id answered to.
+            Event::WorkspaceMoved { id, name, monitor } => {
+                self.workspaces
+                    .insert(id, Workspace { name, monitor: Some(OutputId::new(monitor)) });
+            }
             Event::WorkspaceIdChanged { from, to } => {
-                self.names.remove(&from);
+                self.workspaces.remove(&from);
                 if let Some(windows) = &mut self.windows {
                     for workspace in windows.values_mut() {
                         if *workspace == from {
@@ -210,17 +217,11 @@ impl Tracker {
                 }
             }
             Event::WorkspaceDestroyed { id } => {
-                // The replacement is activated before the one being left is destroyed, so
-                // a monitor still pointing here means the two crossed. Keeping the name
-                // until nothing wants it avoids centring the wallpaper on a workspace that
-                // is in fact still up.
-                if !self.monitors.values().any(|active| *active == id) {
-                    self.names.remove(&id);
-                    // Ids are reused, so what was on this one has to go with it or the
-                    // next workspace to carry the number inherits an occupied look.
-                    if let Some(windows) = &mut self.windows {
-                        windows.retain(|_, workspace| *workspace != id);
-                    }
+                self.workspaces.remove(&id);
+                // Ids are reused, so what was on this one has to go with it or the next
+                // workspace to carry the number inherits an occupied look.
+                if let Some(windows) = &mut self.windows {
+                    windows.retain(|_, workspace| *workspace != id);
                 }
             }
         }
@@ -239,7 +240,7 @@ impl Tracker {
         let outputs: Vec<OutputId> = self.monitors.keys().cloned().collect();
         let mut drives = vec![Drive::OutputsChanged { outputs }];
         let focused = self.focused_output();
-
+        let topology = self.topology();
         // Every monitor's own answer is taken before any of them is told, because
         // `scope = "global"` reads the whole set rather than the output it is driving.
         let reached: BTreeMap<&OutputId, bool> = self
@@ -256,13 +257,12 @@ impl Tracker {
         let anywhere = reached.values().any(|on| *on);
 
         for (output, workspace) in &self.monitors {
-            let name = self.names.get(workspace).map(String::as_str);
-            let from = self.previous.get(output).map(String::as_str);
+            let stop = Self::stop(topology.get(output).map(Vec::as_slice), *workspace);
             let params = settings.for_output(output);
             drives.push(Drive::Scrolled {
                 output: output.clone(),
-                x: params.axis(params.horizontal, name, from),
-                y: params.axis(params.vertical, name, from),
+                x: params.axis(params.horizontal, stop),
+                y: params.axis(params.vertical, stop),
             });
 
             // Every output is told either way, so one that no longer qualifies hears
@@ -274,6 +274,33 @@ impl Tracker {
             drives.push(Drive::Blurred { output: output.clone(), on: blurred });
         }
         drives
+    }
+
+    /// Groups each monitor's live positive workspaces once for one drive calculation.
+    fn topology(&self) -> BTreeMap<OutputId, Vec<i64>> {
+        let mut topology: BTreeMap<OutputId, Vec<i64>> =
+            self.monitors.keys().cloned().map(|output| (output, Vec::new())).collect();
+        for (id, workspace) in &self.workspaces {
+            if *id >= 1
+                && let Some(ids) =
+                    workspace.monitor.as_ref().and_then(|output| topology.get_mut(output))
+            {
+                ids.push(*id);
+            }
+        }
+        for ids in topology.values_mut() {
+            ids.sort_unstable();
+        }
+        topology
+    }
+
+    fn stop(topology: Option<&[i64]>, active: i64) -> Stop {
+        let Some(ids) = topology.filter(|ids| ids.len() > 1 && active >= 1) else {
+            return Stop::CENTRED;
+        };
+        let Ok(index) = ids.binary_search(&active) else { return Stop::CENTRED };
+        let span = (ids.len() - 1) as f32;
+        Stop { at: index as f32 / span, stride: 1.0 / span }
     }
 
     /// The monitor showing the workspace the focused window is on, which is not the monitor
@@ -293,91 +320,123 @@ impl Tracker {
 
     /// The id a workspace name answers to, for the events that carry only the name.
     fn named(&self, name: &str) -> Option<i64> {
-        self.names.iter().find(|(_, listed)| *listed == name).map(|(id, _)| *id)
+        self.workspaces.iter().find(|(_, workspace)| workspace.name == name).map(|(id, _)| *id)
     }
 }
 
-/// A monitor whose workspace has not been reported. No real workspace has this id: the
-/// compositor numbers ordinary ones from 1 and named ones downward from -1.
+/// A monitor whose workspace has not been reported.
+///
+/// No workspace carries this id: ordinary ones count up from 1, special ones from -99, and
+/// named ones down from -1337. The compositor answers 0 for absence itself.
 const UNSET: i64 = 0;
 
 #[cfg(test)]
 mod tests {
-    use domain::Stop;
-
-    use super::super::{Blur, Span};
+    use super::super::Blur;
     use super::*;
+    use domain::Stop;
 
     const FOCUSED: Blur = Blur { when: When::Focused, scope: Scope::Output };
     const NON_EMPTY: Blur = Blur { when: When::NonEmpty, scope: Scope::Output };
     const EVERYWHERE: Blur = Blur { when: When::Focused, scope: Scope::Global };
 
+    /// A window holding the focus, as `j/activewindow` reports one that names no workspace.
+    const WINDOW: &str = r#"{"address":"0x55c3da6fa460"}"#;
+
     fn output(name: &str) -> OutputId {
         OutputId::new(name)
     }
 
-    fn feed(tracker: &mut Tracker, line: &str) {
-        let event = wire::parse(line).expect("should parse").expect("should be modelled");
-        tracker.apply(event);
-    }
-
-    /// Five numbered workspaces, so the two the fixtures use sit at either end. Blurs on
-    /// the focus, which is what most of the fixtures below are actually about.
+    /// Blurs on the focus, which is what most of the fixtures below are about.
     fn settings() -> Scoped<Params> {
-        Scoped::new(Params { span: Span::Count(5), blur: FOCUSED, ..Params::default() })
+        blurring(FOCUSED)
     }
 
-    /// The same, on the blur rule given.
     fn blurring(blur: Blur) -> Scoped<Params> {
-        Scoped::new(Params { span: Span::Count(5), blur, ..Params::default() })
+        Scoped::new(Params { blur, ..Params::default() })
     }
 
-    fn named_settings(names: &[&str]) -> Scoped<Params> {
-        let span = Span::Names(names.iter().map(|name| (*name).to_owned()).collect());
-        Scoped::new(Params { span, blur: FOCUSED, ..Params::default() })
+    fn feed(tracker: &mut Tracker, line: &str) {
+        tracker.apply(wire::parse(line).unwrap().unwrap());
     }
 
-    /// The two monitors this was developed against, as `j/monitors` reports them, with a
-    /// window holding the focus.
-    fn seeded() -> Tracker {
-        seeded_with(r#"{"address":"0x55c3da6fa460"}"#)
+    fn monitor(name: &str, active: i64, focused: bool) -> wire::Monitor {
+        showing(name, active, &active.to_string(), focused)
     }
 
-    fn seeded_with(window: &str) -> Tracker {
+    /// A monitor showing a workspace whose name is not its number, which every named one is.
+    fn showing(name: &str, active: i64, workspace: &str, focused: bool) -> wire::Monitor {
+        wire::decode(&format!(
+            r#"{{"name":"{name}","focused":{focused},"activeWorkspace":{{"id":{active},"name":"{workspace}"}}}}"#
+        )).unwrap()
+    }
+
+    fn workspaces(entries: &[(i64, &str, Option<&str>)]) -> Vec<wire::Workspace> {
+        entries
+            .iter()
+            .map(|(id, name, monitor)| wire::Workspace {
+                id: *id,
+                name: (*name).to_owned(),
+                monitor: monitor.map(str::to_owned),
+            })
+            .collect()
+    }
+
+    /// Two monitors with sparse numeric workspaces, plus the two kinds the compositor
+    /// numbers below zero: `NAMED` from -1337 down, and a special one from -99 up.
+    const LISTED: [(i64, &str, Option<&str>); 7] = [
+        (1, "1", Some("DP-1")),
+        (3, "3", Some("DP-1")),
+        (8, "8", Some("DP-1")),
+        (20, "20", Some("eDP-1")),
+        (40, "40", Some("eDP-1")),
+        (NAMED, "parra", Some("DP-1")),
+        (-99, "special:special", Some("DP-1")),
+    ];
+
+    /// The id the compositor hands the first workspace opened by name.
+    const NAMED: i64 = -1337;
+
+    /// The two monitors as `j/monitors` reports them, with DP-1 showing `active` under the
+    /// name [`LISTED`] gives it, and `dp` saying which of the two holds the focus.
+    fn monitors(active: i64, dp: bool) -> Vec<wire::Monitor> {
+        let name = LISTED
+            .iter()
+            .find(|(id, ..)| *id == active)
+            .map_or_else(|| active.to_string(), |(_, name, _)| (*name).to_owned());
+        vec![showing("DP-1", active, &name, dp), monitor("eDP-1", 20, !dp)]
+    }
+
+    /// DP-1 shows `active` and holds the focus, with a window on it holding the focused one.
+    fn seeded(active: i64) -> Tracker {
+        seeded_with(active, true, WINDOW)
+    }
+
+    /// The same, with `window` as `j/activewindow` answers it.
+    fn seeded_with(active: i64, dp: bool, window: &str) -> Tracker {
         let mut tracker = Tracker::default();
-        let workspaces: Vec<wire::Workspace> =
-            wire::decode(r#"[{"id":1,"name":"1"},{"id":14,"name":"5"}]"#).unwrap();
-        tracker.seed(monitors(true), workspaces, wire::decode(window).unwrap(), Vec::new());
+        tracker.seed(
+            monitors(active, dp),
+            workspaces(&LISTED),
+            wire::decode(window).unwrap(),
+            Vec::new(),
+        );
         tracker
     }
 
-    /// The same two monitors, following the open windows `clients` names.
-    ///
-    /// DP-1 shows workspace 1 and holds the focus; eDP-1 shows workspace 14.
+    /// DP-1 shows workspace 3 and holds the focus, following the open windows `clients`
+    /// names, which is the bookkeeping `blur.when = "non-empty"` reads.
     fn seeded_windows(clients: &str) -> Tracker {
         let mut tracker = Tracker::new(true);
-        let workspaces: Vec<wire::Workspace> =
-            wire::decode(r#"[{"id":1,"name":"1"},{"id":14,"name":"5"}]"#).unwrap();
         tracker.seed(
-            monitors(true),
-            workspaces,
-            wire::decode(r#"{"address":"0x55c3da6fa460"}"#).unwrap(),
+            monitors(3, true),
+            workspaces(&LISTED),
+            wire::decode(WINDOW).unwrap(),
             wire::decode(clients).unwrap(),
         );
         tracker
     }
 
-    /// `dp` picks which of the two the compositor says has the focus.
-    fn monitors(dp: bool) -> Vec<wire::Monitor> {
-        let (a, b) = (dp, !dp);
-        wire::decode(&format!(
-            r#"[{{"name":"DP-1","focused":{a},"activeWorkspace":{{"id":1,"name":"1"}}}},
-                {{"name":"eDP-1","focused":{b},"activeWorkspace":{{"id":14,"name":"5"}}}}]"#
-        ))
-        .unwrap()
-    }
-
-    /// Where one output sits on the axis the defaults drive, which is the horizontal one.
     fn scrolled(drives: &[Drive], want: &str) -> Stop {
         drives
             .iter()
@@ -386,6 +445,11 @@ mod tests {
                 _ => None,
             })
             .expect("the output should be reported")
+    }
+
+    /// Where one output sits on the axis the defaults drive, which is the horizontal one.
+    fn at(drives: &[Drive], want: &str) -> f32 {
+        scrolled(drives, want).at
     }
 
     /// The one output driven to blur, if any.
@@ -407,22 +471,146 @@ mod tests {
             .collect()
     }
 
-    fn at(drives: &[Drive], want: &str) -> f32 {
-        scrolled(drives, want).at
+    #[test]
+    fn sparse_ids_form_independent_monitor_topologies() {
+        for (active, expected) in [(1, 0.0), (3, 0.5), (8, 1.0)] {
+            assert_eq!(
+                scrolled(&seeded(active).drives(&settings()), "DP-1"),
+                Stop { at: expected, stride: 0.5 }
+            );
+        }
+        assert_eq!(
+            scrolled(&seeded(3).drives(&settings()), "eDP-1"),
+            Stop { at: 0.0, stride: 1.0 }
+        );
+    }
+
+    #[test]
+    fn topology_creation_and_destruction_recalculate_immediately() {
+        let mut tracker = seeded(3);
+        assert_eq!(scrolled(&tracker.drives(&settings()), "DP-1").at, 0.5);
+        feed(&mut tracker, "createworkspacev2>>2,2");
+        assert_eq!(
+            scrolled(&tracker.drives(&settings()), "DP-1"),
+            Stop { at: 2.0 / 3.0, stride: 1.0 / 3.0 }
+        );
+        feed(&mut tracker, "destroyworkspacev2>>2,2");
+        assert_eq!(scrolled(&tracker.drives(&settings()), "DP-1"), Stop { at: 0.5, stride: 0.5 });
+    }
+
+    #[test]
+    fn unusable_active_workspaces_are_centred() {
+        assert_eq!(scrolled(&seeded(NAMED).drives(&settings()), "DP-1"), Stop::CENTRED);
+        let mut unknown = seeded(3);
+        feed(&mut unknown, "focusedmonv2>>DP-1,7");
+        assert_eq!(scrolled(&unknown.drives(&settings()), "DP-1"), Stop::CENTRED);
+        let mut singleton = Tracker::default();
+        singleton.seed(
+            vec![monitor("DP-1", 1, true)],
+            workspaces(&[(1, "1", Some("DP-1"))]),
+            wire::decode("{}").unwrap(),
+            Vec::new(),
+        );
+        assert_eq!(scrolled(&singleton.drives(&settings()), "DP-1"), Stop::CENTRED);
+    }
+
+    /// A snapshot can report no focused monitor at all, and the guess a name event makes
+    /// has nothing to stand on there.
+    #[test]
+    fn a_workspace_already_placed_keeps_its_monitor_when_nothing_holds_the_focus() {
+        let mut tracker = Tracker::default();
+        tracker.seed(
+            vec![monitor("DP-1", 3, false)],
+            workspaces(&LISTED),
+            wire::decode("{}").unwrap(),
+            Vec::new(),
+        );
+        feed(&mut tracker, "workspacev2>>3,3");
+        assert_eq!(scrolled(&tracker.drives(&settings()), "DP-1"), Stop { at: 0.5, stride: 0.5 });
+    }
+
+    #[test]
+    fn positive_rename_preserves_numeric_position() {
+        let mut tracker = seeded(3);
+        feed(&mut tracker, "renameworkspace>>3,code");
+        assert_eq!(scrolled(&tracker.drives(&settings()), "DP-1").at, 0.5);
+    }
+
+    #[test]
+    fn move_then_resync_replaces_ownership_and_active_state() {
+        let mut tracker = seeded(3);
+        feed(&mut tracker, "moveworkspacev2>>3,three,eDP-1");
+        tracker.resync(
+            vec![monitor("DP-1", 1, false), monitor("eDP-1", 3, true)],
+            workspaces(&[
+                (1, "1", Some("DP-1")),
+                (8, "8", Some("DP-1")),
+                (3, "three", Some("eDP-1")),
+                (20, "20", Some("eDP-1")),
+                (40, "40", Some("eDP-1")),
+            ]),
+        );
+        assert_eq!(scrolled(&tracker.drives(&settings()), "DP-1").at, 0.0);
+        assert_eq!(scrolled(&tracker.drives(&settings()), "eDP-1").at, 0.0);
+    }
+
+    #[test]
+    fn id_change_then_resync_replaces_the_topology() {
+        let mut tracker = seeded(3);
+        feed(&mut tracker, "changeworkspaceid>>3,4");
+        tracker.resync(
+            vec![monitor("DP-1", 4, true), monitor("eDP-1", 20, false)],
+            workspaces(&[
+                (1, "1", Some("DP-1")),
+                (4, "3", Some("DP-1")),
+                (8, "8", Some("DP-1")),
+                (20, "20", Some("eDP-1")),
+                (40, "40", Some("eDP-1")),
+            ]),
+        );
+        assert_eq!(scrolled(&tracker.drives(&settings()), "DP-1").at, 0.5);
+    }
+
+    #[test]
+    fn monitor_resync_replaces_added_and_removed_outputs() {
+        let mut tracker = seeded(3);
+        tracker.resync(
+            vec![monitor("HEADLESS-1", 9, true)],
+            workspaces(&[(9, "9", Some("HEADLESS-1"))]),
+        );
+        let Drive::OutputsChanged { outputs } = &tracker.drives(&settings())[0] else {
+            panic!("outputs are reported first")
+        };
+        assert_eq!(outputs, &[output("HEADLESS-1")]);
+    }
+
+    #[test]
+    fn named_workspace_identity_still_joins_window_events() {
+        let mut tracker = Tracker::new(true);
+        tracker.seed(
+            vec![showing("DP-1", NAMED, "parra", true)],
+            workspaces(&[(NAMED, "parra", Some("DP-1"))]),
+            wire::decode("{}").unwrap(),
+            Vec::new(),
+        );
+        feed(&mut tracker, "openwindow>>abc,parra,kitty,zsh");
+        let settings = blurring(NON_EMPTY);
+        assert_eq!(all_blurred(&tracker.drives(&settings)), vec!["DP-1"]);
+        assert_eq!(scrolled(&tracker.drives(&settings), "DP-1"), Stop::CENTRED);
     }
 
     #[test]
     fn the_snapshot_answers_before_any_event_arrives() {
-        let drives = seeded().drives(&settings());
-        assert_eq!(at(&drives, "DP-1"), 0.0, "workspace 1 of 5");
-        assert_eq!(at(&drives, "eDP-1"), 1.0, "workspace 5 of 5");
+        let drives = seeded(1).drives(&settings());
+        assert_eq!(at(&drives, "DP-1"), 0.0, "the first of the three it owns");
+        assert_eq!(at(&drives, "eDP-1"), 0.0, "the first of the two it owns");
         assert_eq!(blurred(&drives), Some(output("DP-1")));
     }
 
     /// The axis the settings leave alone stays where an undriven output already sits.
     #[test]
     fn an_axis_pointed_at_nothing_stays_centred() {
-        let drives = seeded().drives(&settings());
+        let drives = seeded(1).drives(&settings());
         let centred = drives.iter().any(|drive| {
             matches!(drive, Drive::Scrolled { output, y, .. }
                 if output.as_str() == "DP-1" && *y == Stop::CENTRED)
@@ -434,32 +622,31 @@ mod tests {
     /// zoom holds at the crop the configuration asks for.
     #[test]
     fn nothing_ever_drives_the_zoom() {
-        let mut tracker = seeded();
-        feed(&mut tracker, "createworkspacev2>>3,3");
-        feed(&mut tracker, "workspacev2>>3,3");
-
+        let mut tracker = seeded(1);
+        feed(&mut tracker, "createworkspacev2>>2,2");
+        feed(&mut tracker, "workspacev2>>2,2");
         let drives = tracker.drives(&settings());
         assert!(!drives.iter().any(|drive| matches!(drive, Drive::ZoomedOut { .. })));
     }
 
     #[test]
     fn a_workspace_change_lands_on_the_focused_monitor() {
-        let mut tracker = seeded();
-        feed(&mut tracker, "createworkspacev2>>3,3");
-        feed(&mut tracker, "workspacev2>>3,3");
+        let mut tracker = seeded(1);
+        feed(&mut tracker, "createworkspacev2>>2,2");
+        feed(&mut tracker, "workspacev2>>2,2");
 
         let drives = tracker.drives(&settings());
-        assert_eq!(at(&drives, "DP-1"), 0.5, "workspace 3 of 5");
-        assert_eq!(at(&drives, "eDP-1"), 1.0, "the other one is untouched");
+        assert_eq!(at(&drives, "DP-1"), 1.0 / 3.0, "the second of 1, 2, 3, 8");
+        assert_eq!(at(&drives, "eDP-1"), 0.0, "the other one is untouched");
     }
 
     #[test]
     fn focusing_a_monitor_reports_its_workspace_too() {
-        let mut tracker = seeded();
-        feed(&mut tracker, "focusedmonv2>>eDP-1,14");
+        let mut tracker = seeded(1);
+        feed(&mut tracker, "focusedmonv2>>eDP-1,40");
 
         let drives = tracker.drives(&settings());
-        assert_eq!(at(&drives, "eDP-1"), 1.0);
+        assert_eq!(at(&drives, "eDP-1"), 1.0, "the last of the two it owns");
         assert_eq!(
             blurred(&drives),
             Some(output("DP-1")),
@@ -471,91 +658,54 @@ mod tests {
     /// focused window where it is, which the compositor says by not mentioning one.
     #[test]
     fn a_monitor_the_cursor_reaches_holds_no_window_and_blurs_for_none() {
-        let mut tracker = seeded();
+        let mut tracker = seeded(1);
         assert_eq!(blurred(&tracker.drives(&settings())), Some(output("DP-1")));
 
-        feed(&mut tracker, "focusedmonv2>>eDP-1,14");
+        feed(&mut tracker, "focusedmonv2>>eDP-1,20");
         assert_eq!(
             blurred(&tracker.drives(&settings())),
             Some(output("DP-1")),
             "eDP-1 has nothing on it, so the window still holding the focus is on DP-1"
         );
 
-        // What the compositor sends once a window there does take the focus.
         feed(&mut tracker, "activewindowv2>>55c3da272150");
         assert_eq!(blurred(&tracker.drives(&settings())), Some(output("eDP-1")));
     }
 
     #[test]
     fn a_workspace_change_after_focus_moves_follows_the_new_monitor() {
-        let mut tracker = seeded();
-        feed(&mut tracker, "focusedmonv2>>eDP-1,14");
-        feed(&mut tracker, "createworkspacev2>>15,2");
-        feed(&mut tracker, "workspacev2>>15,2");
+        let mut tracker = seeded(1);
+        feed(&mut tracker, "focusedmonv2>>eDP-1,20");
+        feed(&mut tracker, "createworkspacev2>>30,30");
+        feed(&mut tracker, "workspacev2>>30,30");
 
         let drives = tracker.drives(&settings());
-        assert_eq!(at(&drives, "eDP-1"), 0.25, "workspace 2 of 5");
+        assert_eq!(at(&drives, "eDP-1"), 0.5, "the middle of 20, 30, 40");
         assert_eq!(at(&drives, "DP-1"), 0.0, "and not the one that lost focus");
     }
 
-    /// The id is the compositor's bookkeeping and says nothing about where a workspace
-    /// sits: named ones are numbered downward from -1.
-    #[test]
-    fn a_named_workspace_is_placed_by_its_name_not_its_id() {
-        let mut tracker = seeded();
-        feed(&mut tracker, "createworkspacev2>>-1337,browser");
-        feed(&mut tracker, "workspacev2>>-1337,browser");
-
-        let drives = tracker.drives(&named_settings(&["browser", "code", "mail"]));
-        assert_eq!(at(&drives, "DP-1"), 0.0);
-    }
-
+    /// The order the compositor really sends: activate the replacement, then destroy the
+    /// one just left, which leaves the row a workspace shorter under the new position.
     #[test]
     fn leaving_a_workspace_destroys_it_without_disturbing_the_new_one() {
-        // The order the compositor really sends: activate the replacement, then destroy
-        // the one just left.
-        let mut tracker = seeded();
-        feed(&mut tracker, "createworkspacev2>>3,3");
-        feed(&mut tracker, "workspacev2>>3,3");
+        let mut tracker = seeded(1);
+        feed(&mut tracker, "createworkspacev2>>2,2");
+        feed(&mut tracker, "workspacev2>>2,2");
         feed(&mut tracker, "destroyworkspacev2>>1,1");
 
-        assert_eq!(at(&tracker.drives(&settings()), "DP-1"), 0.5);
-    }
-
-    #[test]
-    fn a_workspace_still_shown_keeps_its_name_through_a_destroy() {
-        let mut tracker = seeded();
-        feed(&mut tracker, "destroyworkspacev2>>1,1");
-        assert_eq!(at(&tracker.drives(&settings()), "DP-1"), 0.0, "still shown, so still named");
-    }
-
-    #[test]
-    fn a_renamed_workspace_is_placed_under_the_new_name() {
-        let mut tracker = seeded();
-        feed(&mut tracker, "renameworkspace>>1,4");
-        assert_eq!(at(&tracker.drives(&settings()), "DP-1"), 0.75, "workspace 4 of 5");
-    }
-
-    /// A renumbered workspace takes a name with it that the event does not carry, so the
-    /// stale one is dropped and the answer comes from asking again.
-    #[test]
-    fn a_renumbered_workspace_forgets_the_name_its_old_id_answered_to() {
-        let mut tracker = seeded();
-        feed(&mut tracker, "changeworkspaceid>>1,4");
         assert_eq!(
             scrolled(&tracker.drives(&settings()), "DP-1"),
-            Stop::CENTRED,
-            "nothing names what DP-1 shows until the backend asks"
+            Stop { at: 0.0, stride: 0.5 },
+            "the first of 2, 3, 8"
         );
     }
 
     #[test]
     fn hotplug_adds_and_forgets_a_monitor() {
-        let mut tracker = seeded();
+        let mut tracker = seeded(1);
         feed(&mut tracker, "monitoraddedv2>>2,HEADLESS-1,");
-        let drives = tracker.drives(&settings());
         assert_eq!(
-            scrolled(&drives, "HEADLESS-1"),
+            scrolled(&tracker.drives(&settings()), "HEADLESS-1"),
             Stop::CENTRED,
             "nothing has said what it shows yet"
         );
@@ -569,20 +719,20 @@ mod tests {
 
     #[test]
     fn unplugging_the_focused_monitor_leaves_nothing_blurred() {
-        let mut tracker = seeded();
+        let mut tracker = seeded(1);
         feed(&mut tracker, "monitorremovedv2>>0,DP-1,");
         assert_eq!(blurred(&tracker.drives(&settings())), None);
     }
 
     #[test]
     fn a_monitor_with_nothing_on_it_holds_no_focused_window() {
-        let mut tracker = seeded();
+        let mut tracker = seeded(1);
         assert_eq!(blurred(&tracker.drives(&settings())), Some(output("DP-1")));
 
         // Reaching it by keyboard rather than by cursor, which is the one of the two that
         // takes the focus off the window it was on.
         feed(&mut tracker, "activewindowv2>>");
-        feed(&mut tracker, "focusedmonv2>>eDP-1,14");
+        feed(&mut tracker, "focusedmonv2>>eDP-1,40");
 
         let drives = tracker.drives(&settings());
         assert_eq!(blurred(&drives), None, "eDP-1 has the focus, nothing on it does");
@@ -591,9 +741,10 @@ mod tests {
 
     #[test]
     fn switching_to_an_empty_workspace_lets_the_focus_go_and_take_it_back() {
-        let mut tracker = seeded();
+        let mut tracker = seeded(1);
         feed(&mut tracker, "activewindowv2>>");
-        feed(&mut tracker, "workspacev2>>7,2");
+        feed(&mut tracker, "createworkspacev2>>2,2");
+        feed(&mut tracker, "workspacev2>>2,2");
         assert_eq!(blurred(&tracker.drives(&settings())), None);
 
         feed(&mut tracker, "activewindowv2>>55c3da6fa460");
@@ -608,21 +759,21 @@ mod tests {
     /// on, leaving the focus recorded on the one being left.
     #[test]
     fn switching_workspace_on_one_monitor_keeps_the_blur_on_it() {
-        let mut tracker = seeded();
+        let mut tracker = seeded(1);
         feed(&mut tracker, "activewindowv2>>556a4d2bd690");
         feed(&mut tracker, "workspacev2>>3,3");
 
         let drives = tracker.drives(&settings());
         assert_eq!(blurred(&drives), Some(output("DP-1")));
-        assert_eq!(at(&drives, "DP-1"), 0.5, "workspace 3 of 5");
+        assert_eq!(at(&drives, "DP-1"), 0.5, "the middle of 1, 3, 8");
     }
 
     #[test]
     fn a_switch_on_the_monitor_the_cursor_reached_leaves_the_focus_where_it_is() {
-        let mut tracker = seeded();
-        feed(&mut tracker, "focusedmonv2>>eDP-1,14");
-        feed(&mut tracker, "createworkspacev2>>15,2");
-        feed(&mut tracker, "workspacev2>>15,2");
+        let mut tracker = seeded(1);
+        feed(&mut tracker, "focusedmonv2>>eDP-1,20");
+        feed(&mut tracker, "createworkspacev2>>30,30");
+        feed(&mut tracker, "workspacev2>>30,30");
 
         assert_eq!(
             blurred(&tracker.drives(&settings())),
@@ -633,58 +784,37 @@ mod tests {
 
     #[test]
     fn a_snapshot_with_nothing_focused_starts_that_way() {
-        let drives = seeded_with("{}").drives(&settings());
+        let drives = seeded_with(1, true, "{}").drives(&settings());
         assert_eq!(blurred(&drives), None);
-        assert_eq!(
-            at(&drives, "DP-1"),
-            0.0,
-            "which says nothing about what the monitors are showing"
-        );
+        assert_eq!(at(&drives, "DP-1"), 0.0, "which says nothing about what the monitors show");
     }
 
+    /// A workspace only becomes the active one on its new monitor if it was active on the
+    /// old one and that one had the focus, and the event says neither.
     #[test]
-    fn moving_a_workspace_alone_does_not_move_the_monitor_it_landed_on() {
-        // A workspace only becomes the active one on its new monitor if it was active on
-        // the old one and that one had the focus. The event says neither, so it is not
-        // read as an activation.
-        let mut tracker = seeded();
-        feed(&mut tracker, "moveworkspacev2>>9,9,eDP-1");
-
-        assert_eq!(at(&tracker.drives(&settings()), "eDP-1"), 1.0);
-    }
-
-    #[test]
-    fn asking_again_after_a_move_leaves_nothing_stale() {
-        let mut tracker = seeded();
-        feed(&mut tracker, "moveworkspacev2>>1,1,eDP-1");
-
-        // What the backend asks for once the move is announced. DP-1 has been left with a
-        // workspace nothing has named before, so the answer has to carry names too.
-        let moved: Vec<wire::Monitor> = wire::decode(
-            r#"[{"name":"DP-1","focused":false,"activeWorkspace":{"id":3,"name":"3"}},
-                {"name":"eDP-1","focused":true,"activeWorkspace":{"id":1,"name":"1"}}]"#,
-        )
-        .unwrap();
-        tracker.resync(moved);
+    fn moving_a_workspace_rebuilds_both_rows_without_activating_it() {
+        let mut tracker = seeded(1);
+        feed(&mut tracker, "moveworkspacev2>>8,8,eDP-1");
 
         let drives = tracker.drives(&settings());
-        assert_eq!(at(&drives, "eDP-1"), 0.0, "it landed here");
-        assert_eq!(at(&drives, "DP-1"), 0.5, "and is no longer here");
-        assert_eq!(blurred(&drives), Some(output("eDP-1")));
+        assert_eq!(
+            scrolled(&drives, "eDP-1"),
+            Stop { at: 0.5, stride: 0.5 },
+            "it still shows 20, now the middle of 8, 20, 40"
+        );
+        assert_eq!(
+            scrolled(&drives, "DP-1"),
+            Stop { at: 0.0, stride: 1.0 },
+            "and 1 is the first of the two left here"
+        );
     }
 
     /// Cold start has no event behind it to say where the focused window is, so the answer
     /// carries the workspace and the monitor showing it is looked up.
     #[test]
     fn a_cold_start_finds_the_focused_window_away_from_the_focus() {
-        let mut tracker = Tracker::default();
-        let workspaces: Vec<wire::Workspace> =
-            wire::decode(r#"[{"id":1,"name":"1"},{"id":14,"name":"5"}]"#).unwrap();
-        let window =
-            wire::decode(r#"{"address":"0x55c3da6fa460","workspace":{"id":1,"name":"1"}}"#)
-                .unwrap();
-        tracker.seed(monitors(false), workspaces, window, Vec::new());
-
+        let window = r#"{"address":"0x55c3da6fa460","workspace":{"id":1,"name":"1"}}"#;
+        let tracker = seeded_with(1, false, window);
         assert_eq!(
             blurred(&tracker.drives(&settings())),
             Some(output("DP-1")),
@@ -694,8 +824,8 @@ mod tests {
 
     #[test]
     fn asking_again_does_not_disturb_the_focused_window() {
-        let mut tracker = seeded_with("{}");
-        tracker.resync(monitors(false));
+        let mut tracker = seeded_with(1, true, "{}");
+        tracker.resync(monitors(1, false), workspaces(&LISTED));
         assert_eq!(
             blurred(&tracker.drives(&settings())),
             None,
@@ -703,34 +833,9 @@ mod tests {
         );
     }
 
-    /// A round trip through a gap between two equally far stops stays on one side of it.
-    /// The workspace being left is destroyed on the way out, which is why what a monitor
-    /// was showing is remembered by name.
-    #[test]
-    fn an_unlisted_workspace_holds_the_side_of_the_gap_it_came_from() {
-        let sparse = named_settings(&["3", "5"]);
-        let mut tracker = seeded();
-        assert_eq!(at(&tracker.drives(&sparse), "DP-1"), 0.0, "1 is nearest 3");
-
-        feed(&mut tracker, "createworkspacev2>>3,4");
-        feed(&mut tracker, "workspacev2>>3,4");
-        feed(&mut tracker, "destroyworkspacev2>>1,1");
-        assert_eq!(at(&tracker.drives(&sparse), "DP-1"), 0.0, "reached from 1, so it stays at 3");
-
-        feed(&mut tracker, "createworkspacev2>>8,8");
-        feed(&mut tracker, "workspacev2>>8,8");
-        feed(&mut tracker, "destroyworkspacev2>>3,4");
-        assert_eq!(at(&tracker.drives(&sparse), "DP-1"), 1.0, "past the last, so clamped to 5");
-
-        feed(&mut tracker, "createworkspacev2>>3,4");
-        feed(&mut tracker, "workspacev2>>3,4");
-        feed(&mut tracker, "destroyworkspacev2>>8,8");
-        assert_eq!(at(&tracker.drives(&sparse), "DP-1"), 1.0, "reached from 8 this time, so 5");
-    }
-
     #[test]
     fn a_workspace_with_a_window_on_it_blurs_without_holding_the_focus() {
-        let tracker = seeded_windows(r#"[{"address":"0x1","workspace":{"id":14,"name":"5"}}]"#);
+        let tracker = seeded_windows(r#"[{"address":"0x1","workspace":{"id":20,"name":"20"}}]"#);
         assert_eq!(
             all_blurred(&tracker.drives(&blurring(NON_EMPTY))),
             vec!["eDP-1"],
@@ -747,7 +852,7 @@ mod tests {
     #[test]
     fn a_window_opening_and_closing_moves_the_answer() {
         let mut tracker = seeded_windows("[]");
-        feed(&mut tracker, "openwindow>>abc,1,kitty,zsh");
+        feed(&mut tracker, "openwindow>>abc,3,kitty,zsh");
         assert_eq!(all_blurred(&tracker.drives(&blurring(NON_EMPTY))), vec!["DP-1"]);
 
         feed(&mut tracker, "closewindow>>abc");
@@ -757,10 +862,10 @@ mod tests {
     #[test]
     fn a_window_handed_to_another_workspace_takes_the_blur_with_it() {
         let mut tracker =
-            seeded_windows(r#"[{"address":"0xabc","workspace":{"id":1,"name":"1"}}]"#);
+            seeded_windows(r#"[{"address":"0xabc","workspace":{"id":3,"name":"3"}}]"#);
         assert_eq!(all_blurred(&tracker.drives(&blurring(NON_EMPTY))), vec!["DP-1"]);
 
-        feed(&mut tracker, "movewindowv2>>abc,14,5");
+        feed(&mut tracker, "movewindowv2>>abc,20,20");
         assert_eq!(all_blurred(&tracker.drives(&blurring(NON_EMPTY))), vec!["eDP-1"]);
     }
 
@@ -768,27 +873,33 @@ mod tests {
     #[test]
     fn a_renumbered_workspace_keeps_its_windows() {
         let mut tracker =
-            seeded_windows(r#"[{"address":"0xabc","workspace":{"id":1,"name":"1"}}]"#);
-        feed(&mut tracker, "changeworkspaceid>>1,7");
+            seeded_windows(r#"[{"address":"0xabc","workspace":{"id":3,"name":"3"}}]"#);
+        feed(&mut tracker, "changeworkspaceid>>3,7");
 
         // What the backend asks for once the renumbering is announced.
-        let renumbered: Vec<wire::Monitor> = wire::decode(
-            r#"[{"name":"DP-1","focused":true,"activeWorkspace":{"id":7,"name":"1"}},
-                {"name":"eDP-1","focused":false,"activeWorkspace":{"id":14,"name":"5"}}]"#,
-        )
-        .unwrap();
-        tracker.resync(renumbered);
-
+        tracker.resync(
+            vec![monitor("DP-1", 7, true), monitor("eDP-1", 20, false)],
+            workspaces(&[
+                (1, "1", Some("DP-1")),
+                (7, "3", Some("DP-1")),
+                (8, "8", Some("DP-1")),
+                (20, "20", Some("eDP-1")),
+                (40, "40", Some("eDP-1")),
+            ]),
+        );
         assert_eq!(all_blurred(&tracker.drives(&blurring(NON_EMPTY))), vec!["DP-1"]);
     }
 
     /// Hyprland reuses the numbers it hands out, so a workspace going away has to take
     /// what was on it or the next one to carry its id looks occupied.
+    ///
+    /// The window is left in the map on purpose. A `closewindow` that stopped parsing is
+    /// logged and skipped, and this is what keeps one lost that way from staining an id.
     #[test]
     fn a_destroyed_workspace_takes_its_windows_with_it() {
         let mut tracker =
             seeded_windows(r#"[{"address":"0xabc","workspace":{"id":3,"name":"3"}}]"#);
-        feed(&mut tracker, "closewindow>>abc");
+        feed(&mut tracker, "workspacev2>>1,1");
         feed(&mut tracker, "destroyworkspacev2>>3,3");
 
         feed(&mut tracker, "createworkspacev2>>3,3");
@@ -798,7 +909,7 @@ mod tests {
 
     #[test]
     fn one_output_reaching_it_blurs_every_output() {
-        let mut tracker = seeded();
+        let mut tracker = seeded(1);
         assert_eq!(
             all_blurred(&tracker.drives(&blurring(EVERYWHERE))),
             vec!["DP-1", "eDP-1"],
@@ -809,33 +920,38 @@ mod tests {
         assert!(all_blurred(&tracker.drives(&blurring(EVERYWHERE))).is_empty());
     }
 
+    /// `when` is read from the output being asked about, so two outputs can answer
+    /// different questions at once.
     #[test]
     fn one_output_may_blur_on_a_different_rule_from_the_rest() {
-        let mut scoped = blurring(NON_EMPTY);
-        scoped.set_output(output("DP-1"), Params { span: Span::Count(5), ..Params::default() });
+        let tracker = seeded_windows("[]");
+        assert!(
+            all_blurred(&tracker.drives(&blurring(NON_EMPTY))).is_empty(),
+            "no workspace holds a window"
+        );
 
-        let mut tracker = seeded_windows(r#"[{"address":"0x1","workspace":{"id":14,"name":"5"}}]"#);
-        feed(&mut tracker, "activewindowv2>>");
+        let mut mixed = blurring(NON_EMPTY);
+        mixed.set_output(output("DP-1"), Params { blur: FOCUSED, ..Params::default() });
         assert_eq!(
-            all_blurred(&tracker.drives(&scoped)),
-            vec!["eDP-1"],
-            "DP-1 follows the focus, which has left every window, while eDP-1 follows its own"
+            all_blurred(&tracker.drives(&mixed)),
+            vec!["DP-1"],
+            "DP-1 asks for the focus instead, and holds it"
         );
     }
 
-    /// `when` is read from the output being asked about and `scope` from the output being
-    /// driven, so what `"global"` reads can hold two rules at once.
+    /// `scope` is read from the output being driven, so what `"global"` reads can hold two
+    /// rules at once.
     #[test]
     fn an_output_deciding_alone_still_answers_for_one_deciding_together() {
-        let alone = || Params { span: Span::Count(5), ..Params::default() };
+        let alone = || Params { blur: NON_EMPTY, ..Params::default() };
+        let tracker = seeded_windows(r#"[{"address":"0x1","workspace":{"id":3,"name":"3"}}]"#);
+
         let mut together = blurring(Blur { scope: Scope::Global, ..NON_EMPTY });
         together.set_output(output("DP-1"), alone());
-
-        let tracker = seeded_windows(r#"[{"address":"0x1","workspace":{"id":1,"name":"1"}}]"#);
         assert_eq!(
             all_blurred(&tracker.drives(&together)),
             vec!["DP-1", "eDP-1"],
-            "eDP-1 shows an empty workspace, and blurs on DP-1 holding the focus"
+            "eDP-1 shows an empty workspace, and blurs on DP-1's own answer being yes"
         );
 
         let mut apart = blurring(NON_EMPTY);
@@ -855,36 +971,10 @@ mod tests {
         assert!(Tracker::new(true).tracks_windows());
     }
 
-    /// A tracker asked for no window map stays without one, however many window events
-    /// arrive: nothing reads it, so none of them may be what builds it.
     #[test]
-    fn window_events_leave_an_unasked_for_map_unbuilt() {
-        let mut tracker = Tracker::new(false);
+    fn untracked_windows_remain_unallocated() {
+        let mut tracker = seeded(3);
+        feed(&mut tracker, "openwindow>>abc,3,kitty,zsh");
         assert!(tracker.windows.is_none());
-
-        tracker.seed(
-            monitors(true),
-            wire::decode(r#"[{"id":1,"name":"1"},{"id":14,"name":"5"}]"#).unwrap(),
-            wire::decode(r#"{"address":"0x55c3da6fa460"}"#).unwrap(),
-            Vec::new(),
-        );
-        assert!(tracker.windows.is_none());
-
-        feed(&mut tracker, "openwindow>>abc,1,kitty,zsh");
-        feed(&mut tracker, "movewindowv2>>abc,14,5");
-        feed(&mut tracker, "closewindow>>abc");
-        assert!(tracker.windows.is_none());
-    }
-
-    /// The span is per output like every other setting, and sharing one is what makes a
-    /// monitor travel through only part of its wallpaper.
-    #[test]
-    fn an_output_is_placed_in_its_own_span() {
-        let mut scoped = settings();
-        scoped.set_output(output("eDP-1"), Params { span: Span::Count(14), ..Params::default() });
-
-        let drives = seeded().drives(&scoped);
-        assert_eq!(at(&drives, "DP-1"), 0.0, "workspace 1 of 5");
-        assert_eq!(at(&drives, "eDP-1"), 4.0 / 13.0, "workspace 5 of 14");
     }
 }
