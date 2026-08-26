@@ -24,12 +24,9 @@
 
 ## TL;DR
 
-parra works with any compositor that supports wlr-layer-shell. need a supported compositor, which so far those are niri and
-Hyprland.
-
 parra works with any compostior that implements wlr-layer-shell. However,
 the compositor-driven animation effects need a supported compositor. And so far
-thoses are niri and Hyprland.
+those are niri and Hyprland.
 
 <details>
 <summary>For niri</summary>
@@ -129,7 +126,7 @@ parra set /path/to/preferred/wallpaper.ext
 
 > [!IMPORTANT]
 >
-> Above is only a quick guide. If you run into any troubles or wonder how these things
+> Above is only a quick guide. If you run into any problems or wonder how these things
 > work, please refer to the following sections and other documentations.
 
 ## Compositor integration
