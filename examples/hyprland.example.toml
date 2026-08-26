@@ -130,9 +130,6 @@ easing = "out-cubic"
 mode = "fade"
 duration-ms = 800
 easing = "in-out-cubic"
-# Whether a wallpaper arriving on an output that has none fades up out of whatever the
-# compositor draws below, at startup and whenever a monitor is plugged in.
-at-start = true
 
 # Per-output overrides, keyed by connector name as the compositor reports it.
 # Any key left out is inherited from the sections above, `compositor` included.

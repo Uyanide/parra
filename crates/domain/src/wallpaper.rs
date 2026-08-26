@@ -107,11 +107,7 @@ impl WallpaperSlot {
         // screen to cross into.
         let arriving = self.current.is_none() && self.outgoing.is_none() && next.is_some();
         let leaving = next.is_none();
-        let tween = if arriving && !transition.at_start {
-            Tween::INSTANT
-        } else {
-            transition.effective_tween()
-        };
+        let tween = transition.effective_tween();
         let crossfade = if arriving || leaving { Tween::INSTANT } else { tween };
 
         let previous = self.current.clone();
@@ -249,17 +245,6 @@ mod tests {
         // Compared exactly where the opaque region is decided, so anything short of full
         // would leave the surface blended for ever.
         assert_eq!(slot.opacity(), 1.0);
-    }
-
-    #[test]
-    fn an_arrival_turned_off_appears_outright() {
-        let params = TransitionParams { at_start: false, ..fade() };
-        let mut slot = WallpaperSlot::new();
-        let swap = slot.set(Some(WallpaperRef::new("/tmp/a.png")), &params).unwrap();
-
-        assert!(swap.tween.is_instant());
-        assert_eq!(slot.opacity(), 1.0);
-        assert!(slot.is_settled());
     }
 
     #[test]

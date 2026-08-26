@@ -95,7 +95,6 @@ pub struct TransitionSection {
     pub mode: Option<TransitionMode>,
     pub duration_ms: Option<u32>,
     pub easing: Option<Easing>,
-    pub at_start: Option<bool>,
 }
 
 /// A `[output."DP-1"]` table: the global sections that can vary per monitor.

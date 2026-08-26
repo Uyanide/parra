@@ -252,7 +252,6 @@ fn apply_transition(
     prefix: &str,
 ) -> Result<()> {
     overwrite(&mut params.mode, section.mode);
-    overwrite(&mut params.at_start, section.at_start);
     apply_tween(
         &mut params.tween,
         section.duration_ms,
@@ -733,14 +732,4 @@ mod tests {
         assert_eq!(config.global.transition.tween.duration, 0.25);
     }
 
-    #[test]
-    fn the_arrival_is_on_unless_the_file_turns_it_off() {
-        assert!(parse("").unwrap().global.transition.at_start);
-
-        let file =
-            "[transition]\nat-start = false\n\n[output.\"DP-1\"]\ntransition.at-start = true\n";
-        let config = parse(file).unwrap();
-        assert!(!config.global.transition.at_start);
-        assert!(config.for_output(&OutputId::new("DP-1")).transition.at_start, "overridden");
-    }
 }

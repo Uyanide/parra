@@ -429,19 +429,14 @@ of the screen, around 370 MB for a 3200x1800 output. An absolute clamp at whatev
 | `mode`        | `"fade"`         | `"fade"` crossfades the outgoing wallpaper into the incoming one. `"none"` swaps outright. |
 | `duration-ms` | `800`            |                                                                                            |
 | `easing`      | `"in-out-cubic"` |                                                                                            |
-| `at-start`    | `true`           | Whether a wallpaper arriving on an output that has none fades up from what is drawn below. |
 
 A fade holds both wallpapers, and both of their blurs, until it finishes: about 19 MB
 extra on a 2560x1440 output at the default `crop-ratio`, scaling with the same square as
 the figure above. `mode = "none"` gives that memory back and swaps instantly.
 
-`at-start` covers the daemon starting, a monitor being plugged in, and any other moment an
-output goes from showing nothing to showing something. It uses the same `duration-ms` and
-`easing`, and `mode = "none"` turns it off along with the crossfade. What shows through
-while it runs is whatever the compositor draws below the layer surface.
-
-An output going the other way, from showing something to showing nothing, fades out over
-the same `duration-ms` and `easing` and is left transparent.
+An output going from showing nothing to showing something fades up out of whatever is
+drawn below over the same `duration-ms` and `easing`; one going the other way fades out
+and is left transparent. `mode = "none"` swaps outright both ways.
 
 Two cases snap whatever the mode says:
 

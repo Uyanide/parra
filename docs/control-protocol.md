@@ -226,8 +226,8 @@ against its own clock. Four rules make that work:
 
 - A later event for the same output and property replaces the earlier one, and its `from`
   is the value mid-flight, so a redirected animation is fully described.
-- `duration_us` of `0` means jump. That covers a zero-duration tween,
-  `transition.mode = "none"` and `transition.at-start = false`.
+- `duration_us` of `0` means jump. That covers a zero-duration tween and
+  `transition.mode = "none"`.
 - Nothing is reported when nothing changed, including re-resolving to the value an output
   already rests at.
 - The start event says when it ends, and no settled event follows.
