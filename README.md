@@ -1,15 +1,15 @@
 # parra
 
+A wlr-layer-shell wallpaper daemon that supports compositor-driven effects:
+
 ![showcase](./docs/images/scroll.webp)
 
 > The illustration: [하얀새 - 星いっぱいの空とめぐみん (Pixiv)][showcase-source]
 
 [showcase-source]: https://www.pixiv.net/artworks/77297453
 
-A wlr-layer-shell wallpaper daemon that supports compositor-driven effects:
-
 - **vertical parallax scrolling**
-- **horizontal parallax scrolling**
+- **horizontal parallax scrolling** (disabled by default)
 - **blurring and tinting**
 - **zoom-in/out**
 
@@ -25,6 +25,40 @@ and with some extras:
 - **configuration override** per monitor
 - **control via IPC** for multiple actions and queries
 - **a listenable event stream** that reports changes in status
+
+and fully configurable, e.g. enabling **horizontal scrolling** and some
+tweaking to the animations:
+
+![horizontal](./docs/images/horizontal.webp)
+
+<details>
+<summary>~/.config/parra/niri.toml</summary>
+
+```toml
+[general]
+namespace = "parra-backdrop"
+
+[blur]
+tint = "#1e1e2e"
+
+[zoom]
+crop-ratio = 0.5
+duration-ms = 1200
+easing = "out-quint"
+
+[scroll.vertical]
+max-shift = 0.6
+duration-ms = 600
+
+[scroll.horizontal]
+max-shift = 0.6
+duration-ms = 600
+
+[compositor]
+horizontal = "column"
+```
+
+</details>
 
 > [!NOTE]
 >
