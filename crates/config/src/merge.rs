@@ -731,5 +731,4 @@ mod tests {
         assert_eq!(config.global.transition.mode, TransitionMode::None);
         assert_eq!(config.global.transition.tween.duration, 0.25);
     }
-
 }

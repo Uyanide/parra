@@ -136,10 +136,7 @@ pub struct TransitionParams {
 
 impl Default for TransitionParams {
     fn default() -> Self {
-        Self {
-            mode: TransitionMode::Fade,
-            tween: Tween::new(0.8, Easing::InOutCubic),
-        }
+        Self { mode: TransitionMode::Fade, tween: Tween::new(0.8, Easing::InOutCubic) }
     }
 }
 

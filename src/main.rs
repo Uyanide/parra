@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use clap::{CommandFactory, Parser, Subcommand};
-use clap_complete::{generate, Shell};
+use clap_complete::{Shell, generate};
 use control::ClientError;
 use tracing_subscriber::EnvFilter;
 
