@@ -12,7 +12,7 @@ mod wayland;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::os::fd::BorrowedFd;
 
-use domain::{MonitorState, OutputId, PixelSize, SurfaceParams, WallpaperRef};
+use domain::{MonitorState, OutputId, PixelSize, SurfaceParams, Travel, View, WallpaperRef};
 use glow::HasContext;
 use tracing::debug;
 
@@ -152,6 +152,17 @@ impl Renderer {
         self.wayland.surfaces().filter(|surface| surface.is_drawable()).map(|surface| &surface.id)
     }
 
+    /// Travel the wallpaper this output is arriving at has at the configured deepest
+    /// zoom, or `None` while nothing has been decoded to measure.
+    ///
+    /// `None` rather than a zero, because the two mean opposite things: an image with no
+    /// headroom pins the axis, and one that has not landed yet says nothing about it.
+    pub fn travel(&self, state: &MonitorState) -> Option<Travel> {
+        let texture = self.textures.get(state.wallpaper.current()?)?;
+        View::new(texture.size(), state.buffer_size())
+            .map(|view| view.travel(state.params.zoom.factor()))
+    }
+
     /// Records that this output's next frame differs for a reason no animation reports.
     ///
     /// `draw` takes an animation still being in flight as its evidence that something
@@ -171,10 +182,16 @@ impl Renderer {
     /// animation is still running. With everything settled this submits nothing at all,
     /// which is what makes an idle daemon free.
     ///
+    /// Takes in whatever finished decoding and reports it, drawing nothing.
+    ///
+    /// Apart from [`Renderer::draw`] because a wallpaper landing changes where it should
+    /// be sampled from, and the caller has to be able to answer that before the first
+    /// frame containing it rather than after.
+    ///
     /// The events come back rather than joining the queue `dispatch_queued` drains,
     /// because they are not queued on the Wayland connection and pretending otherwise
     /// would make that method's meaning depend on who called it.
-    pub fn draw(
+    pub fn sync(
         &mut self,
         states: &BTreeMap<OutputId, MonitorState>,
     ) -> Result<Vec<RenderEvent>, RenderError> {
@@ -185,7 +202,12 @@ impl Renderer {
         for target in self.targets.values_mut() {
             target.collect(&self.gl.api);
         }
+        Ok(decoded)
+    }
 
+    /// Draws every output owed a frame. [`Renderer::sync`] runs first, so what is drawn
+    /// here is measured against geometry the caller has already resolved against.
+    pub fn draw(&mut self, states: &BTreeMap<OutputId, MonitorState>) -> Result<(), RenderError> {
         let mut pending = Vec::new();
         for surface in self.wayland.surfaces_mut() {
             let Some(state) = states.get(&surface.id) else { continue };
@@ -206,7 +228,7 @@ impl Renderer {
             self.draw_output(&id, state)?;
         }
         self.flush()?;
-        Ok(decoded)
+        Ok(())
     }
 
     /// Takes in what the outputs are about to need and releases what they no longer show.
@@ -224,11 +246,15 @@ impl Renderer {
             .map(|failed| RenderEvent::WallpaperFailed { wallpaper: failed.wallpaper })
             .collect();
         for loaded in ready {
+            let wallpaper = loaded.wallpaper.clone();
             if loaded.stored {
-                let wallpaper = loaded.wallpaper.clone();
-                events.push(RenderEvent::WallpaperStored { wallpaper, asked: loaded.asked });
+                events.push(RenderEvent::WallpaperStored {
+                    wallpaper: wallpaper.clone(),
+                    asked: loaded.asked,
+                });
             }
             self.textures.accept(&self.gl.api, loaded)?;
+            events.push(RenderEvent::WallpaperReady { wallpaper });
         }
 
         // Only what an output is arriving at is worth decoding larger. What it is leaving
@@ -341,7 +367,7 @@ impl Renderer {
         let (previous, uv_previous, mix) = match outgoing {
             Some((previous_sharp, previous_baked)) => (
                 Some((previous_sharp, previous_baked.unwrap_or(previous_sharp))),
-                state.sample_rect(previous_sharp.size()),
+                state.sample_rect_outgoing(previous_sharp.size()),
                 state.wallpaper.fade(),
             ),
             None => (None, uv, 1.0),

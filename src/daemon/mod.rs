@@ -1,7 +1,7 @@
 mod bridge;
 mod loops;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -62,6 +62,14 @@ pub struct Daemon {
     /// Set when the driven channels or signals changed and the targets have not been
     /// re-derived yet. Batches a burst of compositor events into one resolve.
     stale: bool,
+    /// Outputs whose share has to be placed rather than eased, because the travel it is a
+    /// share of changed with nothing to animate it: a wallpaper became resident, or the
+    /// viewport was resized under it.
+    ///
+    /// A `crop-ratio` edit is deliberately not one of these. It moves the travel too, but
+    /// through the zoom's own animation, so the share has the same time to cross that the
+    /// zoom does and placing it would be a jump against an easing frame.
+    to_place: BTreeSet<OutputId>,
     /// First error out of the renderer. The event loop cannot carry it, so it waits here
     /// until the loop has stopped.
     failure: Option<RenderError>,
@@ -93,6 +101,7 @@ impl Daemon {
             started,
             startup_us: None,
             stale: false,
+            to_place: BTreeSet::new(),
             failure: None,
         };
         daemon.restore(None);
@@ -172,6 +181,9 @@ impl Daemon {
             let Some(swap) = swap else { continue };
             self.clocks.insert(id.clone(), now);
             self.subscribers.emit(&Event::wallpaper_changed(&id, &swap));
+            // A resident wallpaper can supply different geometry immediately; a missing
+            // one resolves again when `WallpaperReady` arrives after decode.
+            self.stale = true;
         }
     }
 
@@ -225,17 +237,22 @@ impl Daemon {
     /// without it, about half of all runs stranded an animation part-way through.
     fn settle(&mut self) -> Result<(), RenderError> {
         loop {
+            // Before the frame rather than after it: a wallpaper landing moves where it
+            // is sampled from, and drawing it first would put one frame of the old
+            // placement on screen for the resolve below to then correct.
+            let decoded = self.renderer.sync(&self.states)?;
+            let idle = decoded.is_empty();
+            self.consume(decoded);
             if std::mem::take(&mut self.stale) {
                 self.resolve();
             }
-            let drawn = self.renderer.draw(&self.states)?;
+            self.renderer.draw(&self.states)?;
             self.note_first_frame();
 
             let queued = self.renderer.dispatch_queued()?;
-            if drawn.is_empty() && queued.is_empty() {
+            if idle && queued.is_empty() {
                 return Ok(());
             }
-            self.consume(drawn);
             self.consume(queued);
         }
     }
@@ -265,8 +282,16 @@ impl Daemon {
             match event {
                 RenderEvent::OutputReady { id, logical, scale } => match self.states.get_mut(&id) {
                     Some(state) => {
-                        state.logical = logical;
-                        state.scale = scale;
+                        // The viewport changes between one frame and the next, and with it
+                        // how much of the image is outside it. Placing the share keeps
+                        // `max-shift` honoured across the step instead of easing back to
+                        // it from wherever the new size left the old share pointing.
+                        if (state.logical, state.scale) != (logical, scale) {
+                            state.logical = logical;
+                            state.scale = scale;
+                            self.to_place.insert(id);
+                            self.stale = true;
+                        }
                     }
                     None => self.add_output(id, logical, scale),
                 },
@@ -274,11 +299,22 @@ impl Daemon {
                     debug!(output = %id, "dropping output state");
                     self.states.remove(&id);
                     self.clocks.remove(&id);
+                    self.to_place.remove(&id);
                     self.subscribers.emit(&Event::OutputGone { output: id });
                 }
                 RenderEvent::FrameDue { id } => self.tick(&id),
                 RenderEvent::WallpaperStored { wallpaper, asked } => {
                     self.on_wallpaper_stored(&wallpaper, asked);
+                }
+                RenderEvent::WallpaperReady { wallpaper } => {
+                    let showing: Vec<OutputId> = self
+                        .states
+                        .values()
+                        .filter(|state| state.wallpaper.current() == Some(&wallpaper))
+                        .map(|state| state.id.clone())
+                        .collect();
+                    self.stale |= !showing.is_empty();
+                    self.to_place.extend(showing);
                 }
                 RenderEvent::WallpaperFailed { wallpaper } => {
                     self.on_wallpaper_failed(&wallpaper);
@@ -301,13 +337,13 @@ impl Daemon {
         let mut state = MonitorState::new(id.clone(), params);
         state.logical = logical;
         state.scale = scale;
-        // Beside the geometry rather than left to the next resolve: arriving does not set
-        // `stale`, so an output whose compositor says nothing more would draw uncapped.
-        state.stride = self.driven.output(&id).stride();
-        state.snap(&policy::resolve(&id, &self.driven, &self.signals, &state.params));
         let swap = state.set_wallpaper(wallpaper);
+        state.travel = self.renderer.travel(&state);
+        state.snap(&policy::resolve(&id, &self.driven, &self.signals, &state.params, state.travel));
         self.clocks.insert(id.clone(), Instant::now());
-        // Snapped, so no animation event will ever carry these values: the arrival does.
+        // Snapped, so no animation of any duration carries these values: the arrival
+        // does. Where the scroll sits is not knowable yet, since `max-shift` has no image
+        // to measure against; the move of no duration that places it says so when it is.
         self.subscribers.emit(&Event::output_ready(&state));
         // After it, and separately, because the wallpaper is the one value that did not
         // snap. Without this a listener is never told the arrival is under way.
@@ -363,21 +399,30 @@ impl Daemon {
     }
 
     /// Re-derives every output's targets and eases toward them. Called when the driven
-    /// channels, the signals or the configuration change, never when only geometry did.
+    /// channels, the signals, the configuration or the geometry change.
+    ///
+    /// Geometry is one of them because a target is measured against the current
+    /// wallpaper's travel: a resize, a swap and a finished decode each move it.
     fn resolve(&mut self) {
         // The animations start now, so the clocks do too. A clock left at the last frame
         // of the previous one would spend the whole idle period on the first tick.
         let now = Instant::now();
         for (id, state) in &mut self.states {
-            let targets = policy::resolve(id, &self.driven, &self.signals, &state.params);
+            // Only overwritten when the renderer has something to measure, so a wallpaper
+            // whose decode is still in flight resolves against the one it is replacing.
+            if let Some(travel) = self.renderer.travel(state) {
+                state.travel = Some(travel);
+            }
+            let targets =
+                policy::resolve(id, &self.driven, &self.signals, &state.params, state.travel);
+            // A different image under the same position is not movement, so it is placed
+            // rather than eased toward. Nothing has drawn this wallpaper yet, and the one
+            // it is replacing holds its own place, so there is nothing on screen to jump.
+            if self.to_place.remove(id) {
+                let placed = state.replace_geometry(&targets);
+                announce_moves(&mut self.subscribers, id, placed);
+            }
             let channels = self.driven.output(id);
-            // Read at sample time rather than animated toward, so it is assigned here
-            // rather than reaching the state through `Targets`. A change to it moves the
-            // sampled rect with the position standing still, which is what opening a
-            // workspace does, so it is one of the two things owing a frame below.
-            let stride = channels.stride();
-            let restrided = state.stride != stride;
-            state.stride = stride;
             debug!(
                 output = %id,
                 driven = %format!("{:.3},{:.3}", channels.x.at, channels.y.at),
@@ -389,9 +434,7 @@ impl Daemon {
             );
             let moves = state.apply(&targets);
             self.clocks.insert(id.clone(), now);
-            // A move that takes time is drawn because it is still running. One of no
-            // duration has settled by the next pass, so this is the only report of it.
-            if restrided || moves != Moves::default() {
+            if moves != Moves::default() {
                 self.renderer.invalidate(id);
             }
             announce_moves(&mut self.subscribers, id, moves);
@@ -592,9 +635,8 @@ impl Daemon {
             if let Some(state) = self.states.get_mut(&id) {
                 state.apply_params(params);
             }
-            // Several parameters are read where the frame is built rather than eased
-            // toward -- `scroll.<axis>.max-shift` and the whole of the blur's look -- so
-            // an edit touching only those starts no animation to be drawn by.
+            // Blur appearance is still sampled directly; scroll configuration is resolved
+            // below and reaches the screen through its axis animation.
             self.renderer.invalidate(&id);
         }
         // After the params, since that is where the edited fallback arrives. It reaches

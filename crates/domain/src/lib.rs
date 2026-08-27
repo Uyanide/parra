@@ -16,7 +16,7 @@ pub mod zoom;
 pub use anim::{Animated, Easing, Motion, Move, Tween};
 pub use blur::BlurState;
 pub use color::Rgba;
-pub use geometry::{Limit, Limits, UvRect, Zoom, sample_rect};
+pub use geometry::{Travel, UvRect, View, sample_rect};
 pub use monitor::{MonitorState, Moves};
 pub use output::{LogicalSize, OutputId, PixelSize, SCALE_DENOMINATOR, Scale};
 pub use params::{
@@ -24,6 +24,6 @@ pub use params::{
     TransitionMode, TransitionParams, ZoomParams,
 };
 pub use policy::{Channels, Driven, Signals, Targets, wallpaper_for};
-pub use scroll::{ScrollState, Stop, Stride};
+pub use scroll::{ScrollState, Stop};
 pub use wallpaper::{Swap, WallpaperRef, WallpaperSlot};
 pub use zoom::ZoomState;

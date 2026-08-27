@@ -49,9 +49,9 @@ pub struct AxisParams {
     /// Greatest distance the image may move between two adjacent stops, in screen extents
     /// of this axis. `None` lifts the cap.
     ///
-    /// Applied where the rect is built rather than beside `travel`, because it is a
-    /// distance rather than a fraction, and the layer that builds the rect is the only one
-    /// holding the image size, the viewport size and the zoom the axis is actually at.
+    /// Resolved into a share of the travel in `policy::axis`, beside `travel`, because a
+    /// share is what an animation can be run on: a distance would have to be measured
+    /// against a headroom that the zoom is itself moving.
     pub max_shift: Option<f32>,
     pub tween: Tween,
 }

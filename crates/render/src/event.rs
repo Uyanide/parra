@@ -26,6 +26,12 @@ pub enum RenderEvent {
         wallpaper: WallpaperRef,
         asked: PixelSize,
     },
+    /// This wallpaper now has resident dimensions. Reported by `Renderer::sync`, which
+    /// runs before anything is drawn, so an output showing it can measure `max-shift`
+    /// against it and place the image before the first frame that contains it.
+    WallpaperReady {
+        wallpaper: WallpaperRef,
+    },
     /// Nothing could be shown for this wallpaper: neither a cached copy nor the source
     /// itself would load. Why is already in the log.
     WallpaperFailed {

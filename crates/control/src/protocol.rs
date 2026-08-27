@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// Bumped whenever the wire format changes, including when it only gains a field.
 /// `Ping` reports it, which is the only way to tell a stale daemon from an unreachable one.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Every duration on the wire is in microseconds, so nothing has to be read twice to
 /// find out which unit it is in.
@@ -253,7 +253,7 @@ pub struct GpuSnapshot {
 }
 
 /// A scalar mid-animation. `current` answers "what is on screen" and `target` "where is
-/// it going"; both are reported because both have callers.
+/// it going".
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Tween {
     pub current: f32,
@@ -511,11 +511,11 @@ mod tests {
 
     #[test]
     fn an_event_names_itself_the_way_a_request_does() {
-        let started = Move { from: 0.0, to: 1.0, tween: curve() };
+        let started = Move { from: -0.15, to: -0.3, tween: curve() };
         assert_eq!(
             serde_json::to_string(&Event::animation(&output(), Property::ScrollVertical, started))
                 .unwrap(),
-            r#"{"animation":{"output":"DP-1","property":"scroll-vertical","from":0.0,"to":1.0,"duration_us":400000,"easing":"out-cubic"}}"#
+            r#"{"animation":{"output":"DP-1","property":"scroll-vertical","from":-0.15,"to":-0.3,"duration_us":400000,"easing":"out-cubic"}}"#
         );
         assert_eq!(serde_json::to_string(&Event::ConfigReloaded).unwrap(), "\"config-reloaded\"");
     }

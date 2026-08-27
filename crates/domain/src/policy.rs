@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
+use crate::geometry::Travel;
 use crate::output::OutputId;
 use crate::params::{AxisParams, OutputParams};
-use crate::scroll::{ScrollState, Stop, Stride};
+use crate::scroll::Stop;
 use crate::wallpaper::WallpaperRef;
 
 /// What the compositor drives on one output, before any configuration is applied.
@@ -15,14 +16,6 @@ pub struct Channels {
     pub y: Stop,
     pub blur: bool,
     pub zoom_out: bool,
-}
-
-impl Channels {
-    /// The strides both axes were last reported at, which is all the geometry needs of
-    /// them.
-    pub fn stride(&self) -> Stride {
-        Stride { v: self.y.stride, h: self.x.stride }
-    }
 }
 
 /// Every output a compositor backend is driving.
@@ -102,8 +95,8 @@ impl Signals {
     }
 }
 
-/// Where every animated property should be heading. Everything is normalized to `0..=1`
-/// except the zoom factor, which is a multiplier.
+/// Where every animated property should be heading. Scroll is the share of the headroom
+/// the live zoom leaves, `-0.5..=0.5` from the image centre; zoom is a multiplier.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Targets {
     pub scroll_v: f32,
@@ -121,13 +114,14 @@ pub fn resolve(
     driven: &Driven,
     signals: &Signals,
     params: &OutputParams,
+    travel: Option<Travel>,
 ) -> Targets {
     let channels = driven.output(output);
     let blur_on = params.blur.is_enabled() && (channels.blur || signals.blur(output));
 
     Targets {
-        scroll_v: axis(channels.y.at, &params.scroll.vertical),
-        scroll_h: axis(channels.x.at, &params.scroll.horizontal),
+        scroll_v: axis(channels.y, &params.scroll.vertical, travel.map(|travel| travel.v)),
+        scroll_h: axis(channels.x, &params.scroll.horizontal, travel.map(|travel| travel.h)),
         blur: if blur_on { 1.0 } else { 0.0 },
         zoom: if channels.zoom_out { 1.0 } else { params.zoom.factor() },
     }
@@ -147,21 +141,37 @@ pub fn wallpaper_for<'a>(
     signals.wallpaper(output).or(params.fallback.as_ref())
 }
 
-/// Scales the excursion about the centre rather than the raw position, so a travel below
-/// 1 shortens the movement symmetrically instead of biasing it toward one edge.
+/// Resolves one compositor stop to the share of the headroom it may use, which is the
+/// whole of what reaches the animator for this axis.
 ///
-/// Inverting negates that same excursion, which leaves the centre a fixed point: an
-/// undriven output does not move when the key is toggled.
-fn axis(position: f32, params: &AxisParams) -> f32 {
-    let offset = position - ScrollState::CENTRE;
-    let travel = if params.invert { -params.travel } else { params.travel };
-    (ScrollState::CENTRE + offset * travel).clamp(0.0, 1.0)
+/// `available` is the image's edge-to-edge travel at the deepest zoom, in screens, which
+/// is the unit `max-shift` is written in. Dividing the cap by it turns a distance into a
+/// share once, at a zoom that does not move, so every shallower zoom scales the same
+/// mapping rather than choosing a different one.
+///
+/// An image that has not been decoded yet leaves the cap off: `max-shift` is a distance
+/// in screens and there is nothing to measure it against until one arrives.
+fn axis(stop: Stop, params: &AxisParams, available: Option<f32>) -> f32 {
+    let share = match (params.max_shift, available) {
+        (Some(max_shift), Some(available))
+            if max_shift > 0.0 && stop.stride > 0.0 && available > 0.0 =>
+        {
+            (max_shift / (stop.stride * available)).min(params.travel)
+        }
+        _ => params.travel,
+    };
+    let direction = if params.invert { -1.0 } else { 1.0 };
+    (stop.at.clamp(0.0, 1.0) - 0.5) * share * direction
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::params::{BlurParams, ScrollParams};
+
+    /// Two screens of headroom on each axis, so a cap stated in screens has room to bite.
+    const TRAVEL: Option<Travel> = Some(Travel { h: 2.0, v: 2.0 });
+    const AVAILABLE: Option<f32> = Some(2.0);
 
     fn output(name: &str) -> OutputId {
         OutputId::new(name)
@@ -176,86 +186,90 @@ mod tests {
         driven
     }
 
-    fn travel(travel: f32) -> AxisParams {
-        AxisParams { travel, ..AxisParams::default() }
+    fn stop(at: f32, stride: f32) -> Stop {
+        Stop { at, stride }
     }
 
-    fn inverted(travel: f32) -> AxisParams {
-        AxisParams { invert: true, ..self::travel(travel) }
-    }
-
-    #[test]
-    fn an_undriven_output_sits_at_the_centre() {
-        let channels = Channels::default();
-        assert_eq!(channels.x, Stop::CENTRED);
-        assert_eq!(channels.y, Stop::CENTRED);
-        assert_eq!(Driven::default().output(&output("DP-1")), channels);
+    fn uncapped(travel: f32) -> AxisParams {
+        AxisParams { travel, max_shift: None, ..AxisParams::default() }
     }
 
     #[test]
-    fn travel_shortens_the_movement_about_the_centre() {
-        assert_eq!(axis(0.0, &travel(1.0)), 0.0);
-        assert_eq!(axis(0.0, &travel(0.5)), 0.25);
-        assert_eq!(axis(1.0, &travel(0.5)), 0.75);
-        assert_eq!(axis(0.0, &travel(0.0)), 0.5, "no travel pins the axis to the centre");
+    fn an_undriven_output_sits_at_the_image_centre() {
+        let targets = resolve(
+            &output("DP-1"),
+            &Driven::default(),
+            &Signals::default(),
+            &OutputParams::default(),
+            TRAVEL,
+        );
+        assert_eq!(targets.scroll_v, 0.0);
+        assert_eq!(targets.scroll_h, 0.0);
     }
 
     #[test]
-    fn inverting_swaps_the_two_ends_of_the_axis() {
-        assert_eq!(axis(0.0, &inverted(1.0)), 1.0);
-        assert_eq!(axis(1.0, &inverted(1.0)), 0.0);
-    }
-
-    /// So that toggling the key never makes an output nothing has reported for jump.
-    #[test]
-    fn the_centre_is_where_inverting_changes_nothing() {
-        assert_eq!(axis(0.5, &inverted(1.0)), axis(0.5, &travel(1.0)));
+    fn travel_shortens_the_share_about_the_centre() {
+        assert_eq!(axis(stop(0.0, 0.0), &uncapped(1.0), AVAILABLE), -0.5);
+        assert_eq!(axis(stop(1.0, 0.0), &uncapped(0.5), AVAILABLE), 0.25);
+        assert_eq!(axis(stop(0.0, 0.0), &uncapped(0.0), AVAILABLE), 0.0, "no travel pins it");
     }
 
     #[test]
-    fn inverting_shortens_about_the_centre_the_way_travel_does() {
-        assert_eq!(axis(0.0, &inverted(0.5)), 0.75);
-        assert_eq!(axis(1.0, &inverted(0.5)), 0.25);
+    fn invert_reverses_the_share_without_moving_the_centre() {
+        let inverted = AxisParams { invert: true, ..uncapped(1.0) };
+        assert_eq!(axis(stop(0.0, 0.0), &inverted, AVAILABLE), 0.5);
+        assert_eq!(axis(stop(1.0, 0.0), &inverted, AVAILABLE), -0.5);
+        assert_eq!(axis(stop(0.5, 0.0), &inverted, AVAILABLE), 0.0);
+    }
+
+    /// The cap is a distance and the target is a share, so it arrives divided by the
+    /// travel it was measured against, once, before anything animates.
+    #[test]
+    fn max_shift_becomes_a_share_of_the_available_travel() {
+        let params = AxisParams::default();
+        assert_eq!(axis(stop(0.0, 1.0), &params, AVAILABLE), -0.075, "two stops");
+        assert_eq!(axis(stop(0.0, 0.5), &params, AVAILABLE), -0.15, "three stops");
     }
 
     #[test]
-    fn an_inverted_axis_with_no_travel_is_still_pinned() {
-        assert_eq!(axis(0.0, &inverted(0.0)), 0.5);
-        assert_eq!(axis(1.0, &inverted(0.0)), 0.5);
+    fn a_stop_shorter_than_the_cap_uses_all_the_travel() {
+        assert_eq!(axis(stop(1.0, 0.1), &AxisParams::default(), AVAILABLE), 0.5);
     }
 
     #[test]
-    fn each_axis_is_inverted_on_its_own() {
+    fn a_continuous_axis_is_not_capped() {
+        assert_eq!(axis(stop(1.0, 0.0), &AxisParams::default(), AVAILABLE), 0.5);
+    }
+
+    /// `max-shift` is a distance in screens, so until something has been decoded there is
+    /// nothing to measure it against and the axis keeps the whole travel.
+    #[test]
+    fn an_undecoded_wallpaper_leaves_the_cap_off() {
+        assert_eq!(axis(stop(1.0, 1.0), &AxisParams::default(), None), 0.5);
+        assert_eq!(axis(stop(1.0, 1.0), &AxisParams::default(), Some(0.0)), 0.5);
+    }
+
+    /// So that the middle of an odd workspace count is the middle of the image, whatever
+    /// the cap is doing to the stops either side of it.
+    #[test]
+    fn the_middle_stop_is_the_image_centre_whatever_the_cap_allows() {
+        for max_shift in [None, Some(0.05), Some(0.3), Some(8.0)] {
+            let params = AxisParams { max_shift, ..AxisParams::default() };
+            assert_eq!(axis(stop(0.5, 0.25), &params, AVAILABLE), 0.0, "max-shift {max_shift:?}");
+        }
+    }
+
+    #[test]
+    fn each_axis_follows_its_channel_and_geometry() {
         let id = output("DP-1");
-        let edges = Channels {
-            x: Stop { at: 1.0, stride: 0.5 },
-            y: Stop { at: 1.0, stride: 0.5 },
-            ..Channels::default()
-        };
-        let driven = driven(&id, edges);
+        let channels = Channels { x: stop(1.0, 0.0), y: stop(0.0, 0.0), ..Channels::default() };
         let params = OutputParams {
-            scroll: ScrollParams { vertical: inverted(1.0), horizontal: travel(1.0) },
+            scroll: ScrollParams { vertical: uncapped(1.0), horizontal: uncapped(1.0) },
             ..OutputParams::default()
         };
-        let targets = resolve(&id, &driven, &Signals::default(), &params);
-
-        assert_eq!(targets.scroll_v, 0.0, "the inverted axis runs the other way");
-        assert_eq!(targets.scroll_h, 1.0, "the other one is untouched");
-    }
-
-    #[test]
-    fn each_axis_follows_its_own_channel() {
-        let id = output("DP-1");
-        let edges = Channels {
-            x: Stop { at: 1.0, stride: 0.5 },
-            y: Stop { at: 0.0, stride: 0.5 },
-            ..Channels::default()
-        };
-        let driven = driven(&id, edges);
-        let targets = resolve(&id, &driven, &Signals::default(), &OutputParams::default());
-
-        assert_eq!(targets.scroll_v, 0.0, "the vertical axis follows the y channel");
-        assert_eq!(targets.scroll_h, 1.0, "the horizontal axis follows the x channel");
+        let targets = resolve(&id, &driven(&id, channels), &Signals::default(), &params, TRAVEL);
+        assert_eq!(targets.scroll_v, -0.5);
+        assert_eq!(targets.scroll_h, 0.5);
     }
 
     #[test]
@@ -265,8 +279,8 @@ mod tests {
         let signals = Signals::default();
         let params = OutputParams::default();
 
-        assert_eq!(resolve(&id, &driven, &signals, &params).blur, 1.0);
-        assert_eq!(resolve(&output("untouched"), &driven, &signals, &params).blur, 0.0);
+        assert_eq!(resolve(&id, &driven, &signals, &params, TRAVEL).blur, 1.0);
+        assert_eq!(resolve(&output("untouched"), &driven, &signals, &params, TRAVEL).blur, 0.0);
     }
 
     #[test]
@@ -276,15 +290,16 @@ mod tests {
         let signals = Signals::default();
         let params = OutputParams::default();
 
-        assert_eq!(resolve(&id, &driven, &signals, &params).zoom, 1.0);
-        assert!(resolve(&output("untouched"), &driven, &signals, &params).zoom > 1.0);
+        assert_eq!(resolve(&id, &driven, &signals, &params, TRAVEL).zoom, 1.0);
+        assert!(resolve(&output("untouched"), &driven, &signals, &params, TRAVEL).zoom > 1.0);
     }
 
     #[test]
     fn nothing_driven_leaves_every_output_sharp() {
         let driven = Driven::default();
         let params = OutputParams::default();
-        assert_eq!(resolve(&output("DP-1"), &driven, &Signals::default(), &params).blur, 0.0);
+        let targets = resolve(&output("DP-1"), &driven, &Signals::default(), &params, TRAVEL);
+        assert_eq!(targets.blur, 0.0);
     }
 
     #[test]
@@ -294,8 +309,8 @@ mod tests {
         signals.set_blur(Some(output("eDP-1")), true);
         let params = OutputParams::default();
 
-        assert_eq!(resolve(&output("eDP-1"), &driven, &signals, &params).blur, 1.0);
-        assert_eq!(resolve(&output("DP-1"), &driven, &signals, &params).blur, 0.0);
+        assert_eq!(resolve(&output("eDP-1"), &driven, &signals, &params, TRAVEL).blur, 1.0);
+        assert_eq!(resolve(&output("DP-1"), &driven, &signals, &params, TRAVEL).blur, 0.0);
     }
 
     #[test]
@@ -309,7 +324,7 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(resolve(&id, &driven, &signals, &params).blur, 0.0);
+        assert_eq!(resolve(&id, &driven, &signals, &params, TRAVEL).blur, 0.0);
     }
 
     #[test]

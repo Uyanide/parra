@@ -1,10 +1,10 @@
-use crate::anim::{Motion, Move};
+use crate::anim::{Animated, Motion, Move, Tween};
 use crate::blur::BlurState;
-use crate::geometry::{Limit, Limits, UvRect, Zoom, sample_rect};
+use crate::geometry::{Travel, UvRect, sample_rect};
 use crate::output::{LogicalSize, OutputId, PixelSize, Scale};
 use crate::params::OutputParams;
 use crate::policy::Targets;
-use crate::scroll::{ScrollState, Stride};
+use crate::scroll::ScrollState;
 use crate::wallpaper::{Swap, WallpaperRef, WallpaperSlot};
 use crate::zoom::ZoomState;
 
@@ -32,11 +32,19 @@ pub struct MonitorState {
     pub scale: Scale,
     pub params: OutputParams,
     pub wallpaper: WallpaperSlot,
+    /// Travel the wallpaper on screen has at the deepest zoom, once something has been
+    /// decoded to measure. Assigned from outside like the geometry above it.
+    ///
+    /// Kept rather than re-read per resolve so that an arriving wallpaper, whose texture
+    /// lands a moment after it is chosen, does not resolve against nothing in between.
+    pub travel: Option<Travel>,
     pub scroll: ScrollState,
-    /// How far one stop of each axis is, as the compositor last reported it. Assigned from
-    /// outside like the geometry is, because it describes what drives the axis rather than
-    /// anything the axis is animating toward.
-    pub stride: Stride,
+    /// Where the wallpaper on its way out sits, frozen when its crossfade began.
+    ///
+    /// The share beside it is resolved against the wallpaper arriving, so without this the
+    /// image leaving would be moved by a decode it has nothing to do with. `None` once
+    /// there is only one image, which is when the share alone is the answer again.
+    pub outgoing_scroll: Option<(f32, f32)>,
     pub blur: BlurState,
     pub zoom: ZoomState,
 }
@@ -50,8 +58,9 @@ impl MonitorState {
             logical: LogicalSize::default(),
             scale: Scale::ONE,
             wallpaper: WallpaperSlot::new(),
+            travel: None,
             scroll: ScrollState::new(),
-            stride: Stride::default(),
+            outgoing_scroll: None,
             blur: BlurState::new(),
             zoom: ZoomState::new(params.zoom.factor()),
             params,
@@ -63,32 +72,16 @@ impl MonitorState {
         self.logical.to_pixels(self.scale)
     }
 
-    /// Region of the wallpaper currently visible, given where the animations have got to.
+    /// Region of one wallpaper currently visible. The animated scroll is a share of the
+    /// headroom, so current and outgoing wallpapers project it onto their own.
     pub fn sample_rect(&self, image: PixelSize) -> UvRect {
         sample_rect(
             image,
             self.buffer_size(),
-            Zoom { at: self.zoom.factor.value(), deepest: self.params.zoom.factor() },
+            self.zoom.factor.value(),
             self.scroll.h.value(),
             self.scroll.v.value(),
-            self.limits(),
         )
-    }
-
-    /// What caps each axis, which is the configured shift beside the stride it applies to.
-    ///
-    /// `travel` has already narrowed the range the position is driven over by the time it
-    /// reaches here, so a stop covers that much less of it. Folding the two together is
-    /// what keeps `travel` applied in one place.
-    fn limits(&self) -> Limits {
-        let axis = |stride: f32, params: &crate::params::AxisParams| Limit {
-            stride: stride * params.travel,
-            max_shift: params.max_shift,
-        };
-        Limits {
-            h: axis(self.stride.h, &self.params.scroll.horizontal),
-            v: axis(self.stride.v, &self.params.scroll.vertical),
-        }
     }
 
     /// Adopts a reloaded configuration.
@@ -99,7 +92,24 @@ impl MonitorState {
     /// Sets the wallpaper. Returns the swap it made, and `None` when the wallpaper asked
     /// for is the one already showing.
     pub fn set_wallpaper(&mut self, next: Option<WallpaperRef>) -> Option<Swap> {
-        self.wallpaper.set(next, &self.params.transition)
+        let was = self.wallpaper.outgoing().cloned();
+        let swap = self.wallpaper.set(next, &self.params.transition);
+        // Only when a different image is the one on its way out. Asking for the wallpaper
+        // already there is not a transition, and a crossfade interrupted in its first half
+        // goes on leaving the image it was already leaving: in both the live share belongs
+        // to something else by now, so reading it would move a frame nothing happened to.
+        if self.wallpaper.outgoing() != was.as_ref() {
+            self.outgoing_scroll =
+                self.wallpaper.outgoing().map(|_| (self.scroll.h.value(), self.scroll.v.value()));
+        }
+        swap
+    }
+
+    /// Region of the wallpaper leaving the screen, which holds the place it was last
+    /// drawn in for as long as the crossfade lasts.
+    pub fn sample_rect_outgoing(&self, image: PixelSize) -> UvRect {
+        let (h, v) = self.outgoing_scroll.unwrap_or((self.scroll.h.value(), self.scroll.v.value()));
+        sample_rect(image, self.buffer_size(), self.zoom.factor.value(), h, v)
     }
 
     /// Starts easing toward freshly resolved targets, reporting whichever of them moved.
@@ -115,6 +125,21 @@ impl MonitorState {
         }
     }
 
+    /// Places the scroll without animating, for when the image underneath it changed
+    /// rather than the position of it: nothing moved, so nothing should be seen moving.
+    ///
+    /// Only the wallpaper arriving is placed. The one leaving keeps `outgoing_scroll`,
+    /// which is why this cannot be seen: it happens before the arriving image is drawn.
+    /// Reported all the same, as the move of no duration that it is, so that a subscriber
+    /// following the values is never told less than the screen was.
+    pub fn replace_geometry(&mut self, targets: &Targets) -> Moves {
+        Moves {
+            scroll_v: place(&mut self.scroll.v, targets.scroll_v),
+            scroll_h: place(&mut self.scroll.h, targets.scroll_h),
+            ..Moves::default()
+        }
+    }
+
     /// Jumps to the targets, for when arriving at them should not itself be an animation.
     pub fn snap(&mut self, targets: &Targets) {
         self.scroll.v.snap(targets.scroll_v);
@@ -124,7 +149,14 @@ impl MonitorState {
     }
 
     pub fn tick(&mut self, dt: f32) -> Motion {
-        self.scroll.tick(dt) | self.blur.tick(dt) | self.zoom.tick(dt) | self.wallpaper.tick(dt)
+        let motion = self.scroll.tick(dt)
+            | self.blur.tick(dt)
+            | self.zoom.tick(dt)
+            | self.wallpaper.tick(dt);
+        if self.wallpaper.outgoing().is_none() {
+            self.outgoing_scroll = None;
+        }
+        motion
     }
 
     pub fn is_settled(&self) -> bool {
@@ -134,6 +166,16 @@ impl MonitorState {
             && self.zoom.factor.is_settled()
             && self.wallpaper.is_settled()
     }
+}
+
+/// Jumps one value and describes the jump, or reports nothing when it was already there.
+fn place(value: &mut Animated, target: f32) -> Option<Move> {
+    let from = value.value();
+    if from == target {
+        return None;
+    }
+    value.snap(target);
+    Some(Move { from, to: target, tween: Tween::INSTANT })
 }
 
 #[cfg(test)]
@@ -148,7 +190,138 @@ mod tests {
     }
 
     fn targets(blur: f32) -> Targets {
-        Targets { scroll_v: 0.5, scroll_h: 0.5, blur, zoom: 1.0 }
+        Targets { scroll_v: 0.0, scroll_h: 0.0, blur, zoom: 1.0 }
+    }
+
+    /// Tall enough that the two images below place one share very differently.
+    const TALL: PixelSize = PixelSize { w: 2937, h: 4796 };
+    const WIDE: PixelSize = PixelSize { w: 5120, h: 1440 };
+
+    fn crossfading() -> MonitorState {
+        let mut state = monitor();
+        state.params.transition =
+            TransitionParams { mode: TransitionMode::Fade, ..TransitionParams::default() };
+        state.set_wallpaper(Some(WallpaperRef::new("/tmp/a.png")));
+        state.scroll.v.snap(-0.45);
+        state
+    }
+
+    /// What a decode landing mid-crossfade must not do: the image on its way out is where
+    /// it was drawn, and a share resolved against the image replacing it is not about it.
+    #[test]
+    fn the_wallpaper_leaving_keeps_its_place_while_the_one_arriving_is_placed() {
+        let mut state = crossfading();
+        let before = state.sample_rect(TALL);
+
+        state.set_wallpaper(Some(WallpaperRef::new("/tmp/b.png")));
+        assert!(state.wallpaper.outgoing().is_some(), "the crossfade is running");
+        assert_eq!(state.sample_rect_outgoing(TALL), before, "the one leaving has not moved");
+
+        let placed = state.replace_geometry(&Targets { scroll_v: -0.08, ..targets(0.0) });
+        assert_eq!(state.sample_rect_outgoing(TALL), before, "and still has not");
+        assert_ne!(state.sample_rect(TALL), before, "the one arriving was placed");
+        assert_eq!(placed.scroll_v.map(|placed| placed.tween.duration), Some(0.0));
+        assert_eq!(placed.scroll_v.map(|placed| placed.from), Some(-0.45));
+    }
+
+    /// `apply_wallpapers` calls this for every output on every pass, so most calls resolve
+    /// to the wallpaper already on screen and must leave the frame alone.
+    #[test]
+    fn asking_for_the_wallpaper_already_there_leaves_the_frozen_place_alone() {
+        let mut state = crossfading();
+        state.set_wallpaper(Some(WallpaperRef::new("/tmp/b.png")));
+        let frozen = state.sample_rect_outgoing(TALL);
+
+        // What a decode landing does: the live share moves to the arriving image's.
+        state.replace_geometry(&Targets { scroll_v: -0.08, ..targets(0.0) });
+
+        assert_eq!(state.set_wallpaper(Some(WallpaperRef::new("/tmp/b.png"))), None);
+        assert_eq!(state.sample_rect_outgoing(TALL), frozen);
+    }
+
+    /// Two slots cannot hold three images, so the first half of a crossfade keeps the one
+    /// already leaving. It kept its place too, and a third wallpaper does not change that.
+    #[test]
+    fn interrupting_a_crossfade_early_leaves_the_image_already_leaving_where_it_was() {
+        let mut state = crossfading();
+        state.set_wallpaper(Some(WallpaperRef::new("/tmp/b.png")));
+        let frozen = state.sample_rect_outgoing(TALL);
+        let leaving = state.wallpaper.outgoing().cloned();
+
+        state.tick(0.05);
+        assert!(state.wallpaper.fade() < 0.5, "still in the first half");
+        state.replace_geometry(&Targets { scroll_v: -0.08, ..targets(0.0) });
+        state.set_wallpaper(Some(WallpaperRef::new("/tmp/c.png")));
+
+        assert_eq!(state.wallpaper.outgoing().cloned(), leaving, "the same image is leaving");
+        assert_eq!(state.sample_rect_outgoing(TALL), frozen);
+    }
+
+    /// Past half way the image leaving is replaced, and the one taking its place is
+    /// wherever it was last drawn, which is the live share.
+    #[test]
+    fn interrupting_a_crossfade_late_freezes_the_image_that_becomes_the_one_leaving() {
+        let mut state = crossfading();
+        state.set_wallpaper(Some(WallpaperRef::new("/tmp/b.png")));
+        state.replace_geometry(&Targets { scroll_v: -0.08, ..targets(0.0) });
+
+        while state.wallpaper.fade() < 0.5 {
+            state.tick(1.0 / 60.0);
+        }
+        let drawn = state.sample_rect(TALL);
+        state.set_wallpaper(Some(WallpaperRef::new("/tmp/c.png")));
+
+        assert_eq!(
+            state.wallpaper.outgoing().map(WallpaperRef::path),
+            Some("/tmp/b.png".as_ref()),
+            "the image that was arriving is now the one leaving"
+        );
+        assert_eq!(state.sample_rect_outgoing(TALL), drawn, "frozen where it was drawn");
+    }
+
+    /// A placement is not movement, so it reports the jump it is rather than starting an
+    /// animation a subscriber would then be waiting to end.
+    #[test]
+    fn placing_reports_a_move_of_no_duration_and_settles_at_once() {
+        let mut state = monitor();
+        state.scroll.v.snap(-0.5);
+        let placed = state.replace_geometry(&Targets { scroll_v: -0.0788, ..targets(0.0) });
+
+        assert_eq!(placed.scroll_v.map(|placed| (placed.from, placed.to)), Some((-0.5, -0.0788)));
+        assert_eq!(placed.blur, None, "only the scroll is placed");
+        assert_eq!(placed.zoom, None);
+        assert!(state.is_settled(), "nothing is left in flight");
+        assert_eq!(state.scroll.v.value(), -0.0788);
+    }
+
+    #[test]
+    fn placing_where_it_already_sits_reports_nothing() {
+        let mut state = monitor();
+        state.scroll.v.snap(-0.3);
+        state.scroll.h.snap(0.0);
+        let placed = state.replace_geometry(&Targets { scroll_v: -0.3, ..targets(0.0) });
+        assert_eq!(placed, Moves::default());
+    }
+
+    /// Held only for as long as there are two images, so an output that has settled is
+    /// back to one share answering for the whole frame.
+    #[test]
+    fn the_frozen_place_is_dropped_when_the_crossfade_ends() {
+        let mut state = crossfading();
+        state.set_wallpaper(Some(WallpaperRef::new("/tmp/b.png")));
+        assert!(state.outgoing_scroll.is_some());
+
+        state.tick(10.0);
+        assert!(state.outgoing_scroll.is_none());
+        assert_eq!(state.sample_rect_outgoing(WIDE), state.sample_rect(WIDE), "one share again");
+    }
+
+    /// An arrival has nothing to crossfade against, so there is no second place to keep.
+    #[test]
+    fn a_first_wallpaper_freezes_nothing() {
+        let state = crossfading();
+        assert!(state.outgoing_scroll.is_none());
+        assert_eq!(state.sample_rect_outgoing(TALL), state.sample_rect(TALL));
     }
 
     #[test]
@@ -175,67 +348,18 @@ mod tests {
         assert_eq!(state.blur.amount.value(), 1.0);
     }
 
-    /// Much taller than the screen, so the default cap has something to bite on.
-    const TALL: PixelSize = PixelSize { w: 2937, h: 4796 };
-
-    /// How far the wallpaper moves between the two ends of the vertical axis, in screen
-    /// heights.
-    fn excursion(state: &mut MonitorState) -> f32 {
-        state.scroll.v.snap(0.0);
-        let top = state.sample_rect(TALL);
-        state.scroll.v.snap(1.0);
-        let bottom = state.sample_rect(TALL);
-        (bottom.v0 - top.v0) / top.height()
-    }
-
     #[test]
-    fn an_output_no_stride_was_reported_for_is_not_capped() {
+    fn a_scroll_retarget_starts_at_the_current_sample() {
         let mut state = monitor();
-        assert_eq!(state.stride, Stride::default());
-        assert!(excursion(&mut state) > 2.0, "the whole travel, cap or no cap");
-    }
+        state.scroll.v.snap(-0.15);
+        let before = state.sample_rect(PixelSize::new(1000, 2000));
 
-    #[test]
-    fn the_reported_stride_is_what_the_cap_measures() {
-        let mut state = monitor();
-        state.stride = Stride { v: 1.0, h: 0.0 };
-        assert!((excursion(&mut state) - 0.3).abs() < 1e-4, "one stop held to max-shift");
+        let moves = state.apply(&Targets { scroll_v: -0.3, ..targets(0.0) });
+        assert!(moves.scroll_v.is_some());
+        assert_eq!(state.sample_rect(PixelSize::new(1000, 2000)), before);
 
-        state.stride = Stride { v: 0.25, h: 0.0 };
-        assert!((excursion(&mut state) - 1.2).abs() < 1e-4, "four stops of it");
-    }
-
-    /// `travel` has already narrowed the range the position is driven over, so a stop
-    /// covers that much less of it and the cap has correspondingly less to do.
-    #[test]
-    fn travel_shortens_the_stop_the_cap_measures() {
-        let mut state = monitor();
-        state.stride = Stride { v: 1.0, h: 0.0 };
-        state.params.scroll.vertical.travel = 0.5;
-        assert!((excursion(&mut state) - 0.6).abs() < 1e-4);
-    }
-
-    /// What a workspace opening does: every position stays where it was and the rect
-    /// still moves, so a redraw cannot be inferred from the animations alone.
-    #[test]
-    fn a_stride_change_moves_the_rect_with_the_position_standing_still() {
-        let mut state = monitor();
-        state.scroll.v.snap(0.0);
-
-        state.stride = Stride { v: 1.0, h: 0.0 };
-        let two_stops = state.sample_rect(TALL);
-        state.stride = Stride { v: 0.5, h: 0.0 };
-        let three_stops = state.sample_rect(TALL);
-
-        assert!(two_stops.v0 > three_stops.v0, "the looser cap reaches further up");
-    }
-
-    #[test]
-    fn lifting_the_cap_gives_the_whole_travel_back() {
-        let mut state = monitor();
-        state.stride = Stride { v: 1.0, h: 0.0 };
-        state.params.scroll.vertical.max_shift = None;
-        assert!(excursion(&mut state) > 2.0);
+        state.tick(10.0);
+        assert_ne!(state.sample_rect(PixelSize::new(1000, 2000)), before);
     }
 
     #[test]

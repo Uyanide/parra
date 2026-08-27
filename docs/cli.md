@@ -101,7 +101,7 @@ The full list of events and the rules they follow is in
 The readable form leads with the same name the JSON uses:
 
 ```
-output-ready DP-1 /srv/a.png scroll 0.500/0.500 blur 1.000 zoom 1.111
+output-ready DP-1 /srv/a.png scroll -0.420/0.000 blur 1.000 zoom 1.111
 animation DP-1 blur 0.000 -> 1.000  over 300.00 ms
 wallpaper-changed DP-1 /srv/a.png -> /srv/b.png  over 800.00 ms
 wallpaper-failed /srv/broken.png

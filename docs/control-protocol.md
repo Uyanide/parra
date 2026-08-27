@@ -102,7 +102,7 @@ see [config.md](config.md#reloading).
 | Response                      | Meaning                      |
 | ----------------------------- | ---------------------------- |
 | `"done"`                      | The request was carried out. |
-| `{"pong":{"version":4}}`      | Protocol version.            |
+| `{"pong":{"version":5}}`      | Protocol version.            |
 | `{"state":{...}}`             | A `StateSnapshot`.           |
 | `{"output":{...}}`            | One `OutputSnapshot`.        |
 | `{"error":{"message":"..."}}` | The request was refused.     |
@@ -111,7 +111,7 @@ see [config.md](config.md#reloading).
 
 ```json
 {
-  "version": 4,
+  "version": 5,
   "namespace": "...",
   "frames": 442,
   "texture_bytes": 56173364,
@@ -123,8 +123,8 @@ see [config.md](config.md#reloading).
       "scale": 1.0,
       "wallpaper": "/srv/a.png",
       "scroll": {
-        "vertical": { "current": 0.33, "target": 0.66 },
-        "horizontal": { "current": 0.5, "target": 0.5 }
+        "vertical": { "current": -0.21, "target": -0.42 },
+        "horizontal": { "current": 0.0, "target": 0.0 }
       },
       "blur": {
         "amount": { "current": 1.0, "target": 1.0 },
@@ -213,11 +213,12 @@ reconnects and is described again from scratch.
 ```json
 {"animation":{"output":"DP-1","property":"blur","from":0.0,"to":1.0,"duration_us":300000,"easing":"in-out-cubic"}}
 {"wallpaper-changed":{"output":"DP-1","from":"/srv/a.png","to":"/srv/b.png","duration_us":800000,"easing":"in-out-cubic"}}
-{"output-ready":{"output":"eDP-1","wallpaper":"/srv/a.png","values":{"scroll_vertical":0.0,"scroll_horizontal":0.5,"blur":0.0,"zoom":1.1111112}}}
+{"output-ready":{"output":"eDP-1","wallpaper":"/srv/a.png","values":{"scroll_vertical":-0.42,"scroll_horizontal":0.0,"blur":0.0,"zoom":1.1111112}}}
 ```
 
-`property` is one of `scroll-vertical`, `scroll-horizontal`, `blur` or `zoom`, in the units
-a snapshot reports them in: `0..=1` for the first three, a multiplier for the zoom.
+`property` is one of `scroll-vertical`, `scroll-horizontal`, `blur` or `zoom`. Scroll runs
+`-0.5..=0.5`, signed from the image centre and measured as a share of the room the current
+zoom leaves outside the screen; blur runs `0..=1`, and zoom is a multiplier.
 `easing` uses the names the config file uses.
 
 `output-ready` carries where the values start, since a monitor appearing snaps. It fires

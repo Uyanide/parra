@@ -292,51 +292,88 @@ other order segfaults in the driver after the last log line.
 
 A backend drives four values and nothing else: two scroll axes normalized to `0..=1`, and
 two booleans for whether an output should be blurred and whether it should be zoomed out.
-They are the animated channels themselves, so `policy::resolve` applies configuration to
-them rather than deciding what they stand for.
+The scroll channels are compositor facts; `policy::resolve` turns them into the targets
+the animator owns.
 
 The vocabulary stops there on purpose. `domain::Channels` is the whole of what a compositor
-can say here, and a backend with something else to report changes `domain` before it
-changes anything else. What the ceiling buys is that `Drive` carries no compositor's words,
-so niri's workspaces and columns reach nothing outside its own backend.
+can say here, and a backend with something else to report changes `domain` before it changes
+anything else. niri's workspaces and columns therefore reach nothing outside its backend.
 
 **An axis is a position and a stride.** `domain::Stop` pairs where the axis sits with the
-distance one of its stops covers, and that second number is there because `scroll.<axis>.max-shift`
-is a distance in screens: turning it into a fraction needs to know how far a single move
-goes, and a position alone cannot say. Only a backend knows what a stop is, so only a
-backend can answer it.
+distance one adjacent stop covers. The stride is instantaneous topology, never animated:
+only a backend knows what one stop means. A zero stride means continuous movement or no
+driven movement and therefore leaves `max-shift` inactive.
 
-That is a fifth number on the wire, and it is worth saying why it does not put the
-discrete-indexed shape back. The stop **count** would: a compositor moving continuously has
-nothing to put in it, and the `Option` it would need is the tell. A stride does not. It is
-normalized like the position beside it, and `0` is a real answer -- *this axis pans
-continuously and therefore never jumps* -- which is also where an undriven output already
-sits. niri's tape, where one switch may cross several stops, and a compositor that swipes
-exactly one workspace however far the jump, are both stated in it; the difference stays
-inside each backend's own `progress`.
+**One animated number per axis, and it is a share rather than a distance.** What reaches
+`MonitorState` is `-0.5..=0.5`: how far off the image's centre the crop sits, as a share of
+the headroom the live zoom leaves. `policy::axis` produces it from `Stop`, `travel`,
+`invert` and `max-shift` in one step, and `geometry::View::sample` multiplies it by that
+headroom. Nothing between the two can bind or stop binding.
 
-The configuration half does not travel the other way. `max-shift` is applied in
-`geometry::sample_rect`, which is the only layer holding the image size, the viewport size
-and the zoom, and which runs per wallpaper slot and per frame. So a resize, a hotplug, a
-wallpaper swap and the overview animation all come out right with nothing to re-resolve,
-and `compositor` goes on reading no shared configuration at all. Sending it a cap instead
-would mean a backend reading geometry it cannot see, at connect time, and never hearing
-that any of it changed.
+The unit is what makes that true, and it is worth saying why the obvious alternative does
+not work. `max-shift` is a distance in screens, so an axis that animates a distance has to
+be held inside the headroom somewhere, and the headroom is a function of the zoom. Whatever
+does the holding -- a `min` on the allowance, a `clamp` on the position -- is then a second
+mapping that the zoom animation can walk into partway through. A wallpaper parked at one end
+of the axis sets off one way, meets the bound, and arrives from the other. Dividing the cap
+by the travel it was measured against turns it into a share once, at a zoom that does not
+move, so every shallower zoom scales one mapping instead of choosing between two.
 
-**The cap is measured at the deepest zoom an output reaches, and `domain::Zoom` carries
-that second number for no other reason.** The fraction of an axis's travel a cap leaves is
-`max_shift * visible / (stride * span)`, where `visible` shrinks and `span` grows as the
-zoom deepens: the fraction is smallest at the deepest zoom, so a fraction taken there holds
-`max-shift` at every zoom shallower than it, and the deepest zoom is where a stop moves
-furthest. Measuring at the live zoom holds the cap too, but only one zoom at a time. It
-makes the fraction a function of an animating number, and an overview animation whose range
-straddles the zoom at which the cap starts binding then watches the available travel rise
-and fall again inside one 300 ms move: a wallpaper parked at either end of the axis sets
-off one way, turns around, and arrives from the other. A 3364x2564 image on a 2560x1600
-output with two workspaces is such a case at the default crop, and it is what the rule
-above exists to prevent. Fixing the fraction leaves the settled zoomed-in rect exactly
-where it was and makes the animation a scaling of one mapping rather than a walk across
-two, at the price of an overview that uses slightly less than the cap allows.
+The renderer supplies the travel, because it is the only layer holding the decoded size:
+`Renderer::travel` measures the wallpaper the output is arriving at, at the configured
+deepest zoom. It answers `None` until something has been decoded, and `MonitorState::travel`
+keeps the last answer, so a wallpaper whose decode is still in flight resolves against the
+one it is replacing rather than against nothing. Geometry becoming known is itself a reason
+to resolve: a completed decode, a resize, a reload and a compositor change all mark the
+daemon stale. `src/daemon` passes the travel through and does no cap arithmetic.
+
+Three properties fall out of the share, and they are the ones worth keeping:
+
+- The rect is inside the image at every zoom, for any share in range, because the offset is
+  a share of exactly the room available.
+- Equal steps of the stop move the image equally, at whatever zoom the output is at, so a
+  workspace at either end travels as far as one in the middle.
+- The middle of an odd stop count is the middle of the image, whatever `max-shift` is doing
+  to the stops either side of it, because the share is signed about zero.
+
+During a crossfade the two textures are not handed the same share. The live one belongs to
+the wallpaper arriving, because that is what the cap was measured against; the one leaving
+keeps `MonitorState::outgoing_scroll`, frozen when it became the image on its way out. It
+is taken then and not on every set, because most sets change nothing -- the daemon resolves
+every output's wallpaper on every pass -- and a crossfade interrupted in its first half goes
+on leaving the image it was already leaving. In both the live share has moved on to another
+image by then, so reading it would move a frame nothing happened to. Without that
+split a decode would move an image it has nothing to do with, and with a tall wallpaper
+arriving that is most of a screen.
+
+**A wallpaper landing is placed, not animated, and the frame order is what makes that
+invisible.** `Renderer::sync` takes decodes in and reports them; `Renderer::draw` runs
+after, so `src/daemon` resolves against the new geometry before the first frame containing
+it. Where the share then lands is not movement -- the position did not change, the image
+under it did -- so `MonitorState::replace_geometry` places it rather than easing toward it.
+Easing would be worse than wrong here: the wallpaper would enter at a share measured
+against the image it is replacing, which for two wallpapers of different shapes is a slide
+across most of the screen for no reason the user gave.
+
+The placement is still reported, as the move of no duration that it is, because a client
+following `animation` events would otherwise lose track of a value the screen changed. The
+same rule covers an output arriving, whose `output-ready` cannot say where the scroll sits
+until something has decoded to measure `max-shift` against.
+
+What is placed and what is eased is decided by whether the travel moved with something to
+carry it, not by whether it moved at all. A wallpaper becoming resident and a viewport
+resize both change it between one frame and the next, and only the share can absorb that,
+so both are placed. A `crop-ratio` edit changes it too, but through the zoom's own
+animation, so the share has exactly as long to cross as the zoom does and easing is what
+keeps the two together. Reading it off a changed travel instead would place all three, and
+the reload is the one where that shows: a fifth of a screen of wallpaper, stepping against
+a zoom that is still easing.
+
+The cost is that `max-shift` is exact at the deepest zoom and proportionally smaller as the
+output zooms out. That is forced rather than chosen: an image whose aspect matches the
+output has no headroom at all at zoom 1, and `crop-ratio` exists to give it some. Holding
+the on-screen distance equal across the zoom range would mean capping every image to what
+the shallowest zoom affords, which is zero for exactly those wallpapers.
 
 Everything is per output. That niri zooms every output out together is niri's rule rather
 than the boundary's: its backend states a value for every output on every update, and
@@ -393,11 +430,11 @@ Which *way* an axis runs is on the other side of that line, in `scroll.<axis>.in
 backend reports where a position sits and says nothing about which end of the image that
 should be; reading it backwards is a statement about the wallpaper, which every backend
 would otherwise have to answer identically. So it is applied in `policy::axis`, beside
-`travel`, and negates the same excursion about the centre that `travel` scales. Two
-properties come from sharing that arithmetic: the centre is a fixed point, so an undriven
-output does not jump when the key is toggled, and `travel` keeps its sign, so the stop
-length `max-shift` measures in `MonitorState::limits` stays positive and the cap needs no
-knowledge of direction at all.
+`travel`, and negates the same share about the centre that `travel` scales. Two properties
+come from sharing that arithmetic: the centre is a fixed point, so an undriven output does
+not jump when the key is toggled, and the sign lands on the finished share rather than on
+the stop length, so the cap goes on dividing by a positive number and needs no knowledge of
+direction.
 
 The axes are configured apart because the compositor animates them apart, and one shared
 curve could only ever match one of the two. Which niri animation each pairs with is in
