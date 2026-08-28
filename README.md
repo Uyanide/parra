@@ -26,8 +26,8 @@ and with some extras:
 - **control via IPC** for multiple actions and queries
 - **a listenable event stream** that reports changes in status
 
-and fully configurable, e.g. enabling **horizontal scrolling** and some
-tweaking to the animations:
+and fully customizable, e.g. enable **horizontal scrolling** and some
+tweaks to the animations, while pin the wallpaper still on eDP-1:
 
 ![horizontal](./docs/images/horizontal.webp)
 
@@ -56,6 +56,10 @@ duration-ms = 600
 
 [compositor]
 horizontal = "column"
+
+[output."eDP-1".compositor]
+horizontal = "none"
+vertical = "none"
 ```
 
 </details>

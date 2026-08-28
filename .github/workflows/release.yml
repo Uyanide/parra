@@ -9,8 +9,8 @@ permissions:
 
 jobs:
   release:
-    # rust 1.88 & glibc 2.36
     runs-on: ubuntu-latest
+    # rust 1.88 & glibc 2.36
     container: rust:1.88-bookworm
     env:
       CARGO_TERM_COLOR: always
