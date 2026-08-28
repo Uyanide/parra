@@ -111,7 +111,7 @@ mod tests {
     /// The same shape with every alpha at full.
     fn opaque_sample() -> Decoded {
         let mut decoded = sample();
-        for pixel in decoded.rgba.chunks_exact_mut(4) {
+        for pixel in decoded.rgba.as_chunks_mut::<4>().0 {
             pixel[3] = u8::MAX;
         }
         decoded.opaque = true;

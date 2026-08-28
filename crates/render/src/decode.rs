@@ -84,7 +84,7 @@ pub fn load(path: &Path, target: PixelSize) -> Result<Decoded, RenderError> {
 /// Stops at the first translucent pixel, so the walk runs in full only for an alpha
 /// channel that says nothing. Whether it is worth starting is the caller's to judge.
 pub fn is_opaque(rgba: &[u8]) -> bool {
-    rgba.chunks_exact(4).all(|pixel| pixel[3] == u8::MAX)
+    rgba.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == u8::MAX)
 }
 
 /// Multiplies the colour channels by alpha, in place, which is the form GL and Wayland
@@ -211,7 +211,7 @@ mod tests {
         };
         premultiply(&mut decoded).unwrap();
 
-        for pixel in decoded.rgba.chunks_exact(4) {
+        for pixel in decoded.rgba.as_chunks::<4>().0 {
             let alpha = pixel[3];
             assert!(pixel[..3].iter().all(|&channel| channel <= alpha), "{pixel:?}");
         }
