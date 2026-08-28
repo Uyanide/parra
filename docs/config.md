@@ -305,7 +305,7 @@ as far as that part is there.
 
 | Key           | Default       | Meaning                                                                                                                                                                                              |
 | ------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `crop-ratio`  | `0.9`         | Fraction of the image visible while zoomed in, `0.25..=1`. The remainder is the headroom the parallax travels through, so `1.0` leaves nothing to scroll unless the image is taller than the screen. |
+| `crop-ratio`  | `0.8`         | Fraction of the image visible while zoomed in, `0.25..=1`. The remainder is the headroom the parallax travels through, so `1.0` leaves nothing to scroll unless the image is taller than the screen. |
 | `duration-ms` | `300`         |                                                                                                                                                                                                      |
 | `easing`      | `"out-cubic"` | See [easing functions](#easing-functions).                                                                                                                                                           |
 

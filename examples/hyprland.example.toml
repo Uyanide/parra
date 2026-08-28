@@ -94,7 +94,7 @@ easing      = "in-out-cubic"
 #
 # Hyprland reports no wider view of an output to zoom back out to, so this is a
 # fixed crop and the two keys below never fire.
-crop-ratio  = 0.9
+crop-ratio  = 0.8
 duration-ms = 300
 easing      = "out-cubic"
 

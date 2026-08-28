@@ -117,7 +117,7 @@ pub struct ZoomParams {
 
 impl Default for ZoomParams {
     fn default() -> Self {
-        Self { crop_ratio: 0.9, tween: Tween::new(0.3, Easing::OutCubic) }
+        Self { crop_ratio: 0.8, tween: Tween::new(0.3, Easing::OutCubic) }
     }
 }
 

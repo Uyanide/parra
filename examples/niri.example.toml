@@ -97,7 +97,7 @@ easing      = "in-out-cubic"
 # Fraction of the image visible while the compositor is not asking for the wider
 # view of an output, which in niri is the overview. The rest is the headroom the
 # parallax scrolls through, so 1.0 means no scrolling at all in one of the axes.
-crop-ratio  = 0.9
+crop-ratio  = 0.8
 duration-ms = 300
 easing      = "out-cubic"
 
