@@ -18,10 +18,21 @@ pub struct Tracker {
     window_workspace: HashMap<u64, u64>,
     /// Window id to its one-based column in the scrolling layout.
     window_column: HashMap<u64, u32>,
-    /// Where the focus last sat in each workspace's scrolling layout.
+    /// Each workspace's active window, as niri reports it directly.
     ///
-    /// Per workspace rather than read from the focus when reporting, because focus is
-    /// global: an output that does not hold it has a scroll position all the same.
+    /// May name a window not yet known to `window_column`, or one still recorded on
+    /// another workspace: niri's own event stream is not atomic, and a workspace's active
+    /// window can be announced before the window itself has been. Which of those pairings
+    /// are trustworthy enough to record is `remember_active_columns`'s question.
+    workspace_active_window: HashMap<u64, u64>,
+    /// Each workspace's column, resolved from `workspace_active_window` once its
+    /// window's column is known.
+    ///
+    /// Per workspace rather than read off a single focused window, because focus is
+    /// global in niri: an output that does not hold it has a scroll position all the
+    /// same. Left standing rather than cleared when the active window's column is not
+    /// yet known, so a workspace's place in the scroll survives a brief gap in niri's
+    /// own event ordering.
     workspace_column: HashMap<u64, u32>,
     focused_window: Option<u64>,
     overview: bool,
@@ -53,6 +64,9 @@ impl Tracker {
         match event {
             Event::WorkspacesChanged { workspaces } => self.replace_workspaces(workspaces),
             Event::WorkspaceActivated { id } => self.activate(id),
+            Event::WorkspaceActiveWindowChanged { workspace_id, active_window_id } => {
+                self.set_active_window(workspace_id, active_window_id)
+            }
             Event::WindowsChanged { windows } => self.replace_windows(windows),
             Event::WindowOpenedOrChanged { window } => {
                 if window.is_focused {
@@ -63,6 +77,7 @@ impl Tracker {
             Event::WindowClosed { id } => {
                 self.window_workspace.remove(&id);
                 self.window_column.remove(&id);
+                self.workspace_active_window.retain(|_, active| *active != id);
                 if self.focused_window == Some(id) {
                     self.focused_window = None;
                 }
@@ -78,22 +93,41 @@ impl Tracker {
             }
             Event::OverviewOpenedOrClosed { is_open } => self.overview = is_open,
         }
-        self.remember_focused_column();
+        self.remember_active_columns();
     }
 
-    /// Records where the focus sits in its own workspace's scrolling layout.
+    /// Records niri's own report of a workspace's active window.
+    fn set_active_window(&mut self, workspace: u64, window: Option<u64>) {
+        match window {
+            Some(window) => {
+                self.workspace_active_window.insert(workspace, window);
+            }
+            None => {
+                self.workspace_active_window.remove(&workspace);
+            }
+        }
+    }
+
+    /// Resolves each workspace's remembered column from its own active window, as niri
+    /// last reported it.
     ///
-    /// A focused window with no column, such as a floating or fullscreen one, leaves the
-    /// last value standing: the workspace has not scrolled just because something is
-    /// drawn over it.
-    fn remember_focused_column(&mut self) {
-        let Some(window) = self.focused_window else { return };
-        let (Some(&workspace), Some(&column)) =
-            (self.window_workspace.get(&window), self.window_column.get(&window))
-        else {
-            return;
-        };
-        self.workspace_column.insert(workspace, column);
+    /// A workspace whose active window has no known column -- floating, fullscreen, or
+    /// merely not yet described -- leaves the last value standing: the workspace has not
+    /// scrolled just because something without a place in the scroll is active there now.
+    ///
+    /// The window must still be recorded on the workspace claiming it. The workspace comes
+    /// from niri and the column from what this daemon last heard, and a window moving
+    /// between workspaces changes those two in separate events: without the check, whichever
+    /// of the pair arrives first credits one workspace with the other's column.
+    fn remember_active_columns(&mut self) {
+        for (&workspace, &window) in &self.workspace_active_window {
+            if self.window_workspace.get(&window) != Some(&workspace) {
+                continue;
+            }
+            if let Some(&column) = self.window_column.get(&window) {
+                self.workspace_column.insert(workspace, column);
+            }
+        }
     }
 
     /// Restates the whole world as channel positions.
@@ -236,6 +270,10 @@ impl Tracker {
     }
 
     fn replace_workspaces(&mut self, workspaces: Vec<Workspace>) {
+        self.workspace_active_window.clear();
+        for workspace in &workspaces {
+            self.set_active_window(workspace.id, workspace.active_window_id);
+        }
         self.workspaces = workspaces
             .into_iter()
             .map(|workspace| {
@@ -330,11 +368,11 @@ mod tests {
         feed(
             &mut tracker,
             r#"{"WorkspacesChanged":{"workspaces":[
-                {"id":1,"idx":1,"output":"DP-1","is_active":true},
-                {"id":3,"idx":2,"output":"DP-1","is_active":false},
-                {"id":5,"idx":3,"output":"DP-1","is_active":false},
-                {"id":2,"idx":1,"output":"eDP-1","is_active":true},
-                {"id":6,"idx":2,"output":"eDP-1","is_active":false}]}}"#,
+                {"id":1,"idx":1,"output":"DP-1","is_active":true,"active_window_id":4},
+                {"id":3,"idx":2,"output":"DP-1","is_active":false,"active_window_id":null},
+                {"id":5,"idx":3,"output":"DP-1","is_active":false,"active_window_id":null},
+                {"id":2,"idx":1,"output":"eDP-1","is_active":true,"active_window_id":3},
+                {"id":6,"idx":2,"output":"eDP-1","is_active":false,"active_window_id":null}]}}"#,
         );
         feed(
             &mut tracker,
@@ -468,6 +506,10 @@ mod tests {
         let mut tracker = populated();
         columns_with_gaps(&mut tracker);
         feed(&mut tracker, r#"{"WindowFocusChanged":{"id":9}}"#);
+        feed(
+            &mut tracker,
+            r#"{"WorkspaceActiveWindowChanged":{"workspace_id":1,"active_window_id":9}}"#,
+        );
 
         assert_eq!(horizontal_of(&tracker.drives(&everywhere(DEFAULTS)), "DP-1"), 0.5);
         assert_eq!(horizontal_of(&tracker.drives(&everywhere(BY_COLUMN)), "DP-1"), 1.0);
@@ -478,6 +520,10 @@ mod tests {
         let mut tracker = populated();
         columns_with_gaps(&mut tracker);
         feed(&mut tracker, r#"{"WindowFocusChanged":{"id":9}}"#);
+        feed(
+            &mut tracker,
+            r#"{"WorkspaceActiveWindowChanged":{"workspace_id":1,"active_window_id":9}}"#,
+        );
 
         let mut settings = everywhere(DEFAULTS);
         settings.set_output(OutputId::new("DP-1"), BY_COLUMN);
@@ -492,6 +538,10 @@ mod tests {
         let mut tracker = populated();
         columns_with_gaps(&mut tracker);
         feed(&mut tracker, r#"{"WindowFocusChanged":{"id":9}}"#);
+        feed(
+            &mut tracker,
+            r#"{"WorkspaceActiveWindowChanged":{"workspace_id":1,"active_window_id":9}}"#,
+        );
         let swapped = Params { vertical: Axis::Column, horizontal: Axis::Workspace, blur: FOCUSED };
 
         let drives = tracker.drives(&everywhere(swapped));
@@ -781,7 +831,8 @@ mod tests {
         assert_eq!(outputs, vec![OutputId::new("DP-1"), OutputId::new("eDP-1")]);
     }
 
-    /// Three columns on DP-1's active workspace, at 1, 5 and 9, with the first focused.
+    /// Three columns on DP-1's active workspace, at 1, 5 and 9, with the first both
+    /// focused and reported as the workspace's own active window.
     fn columns_with_gaps(tracker: &mut Tracker) {
         feed(
             tracker,
@@ -792,6 +843,10 @@ mod tests {
                  "layout":{"pos_in_scrolling_layout":[5,1]}},
                 {"id":9,"workspace_id":1,"is_focused":false,
                  "layout":{"pos_in_scrolling_layout":[9,1]}}]}}"#,
+        );
+        feed(
+            tracker,
+            r#"{"WorkspaceActiveWindowChanged":{"workspace_id":1,"active_window_id":4}}"#,
         );
     }
 
@@ -806,6 +861,10 @@ mod tests {
         );
 
         feed(&mut tracker, r#"{"WindowFocusChanged":{"id":9}}"#);
+        feed(
+            &mut tracker,
+            r#"{"WorkspaceActiveWindowChanged":{"workspace_id":1,"active_window_id":9}}"#,
+        );
         assert_eq!(horizontal_of(&tracker.drives(&everywhere(BY_COLUMN)), "DP-1"), 1.0);
     }
 
@@ -814,6 +873,10 @@ mod tests {
         let mut tracker = populated();
         columns_with_gaps(&mut tracker);
         feed(&mut tracker, r#"{"WindowFocusChanged":{"id":9}}"#);
+        feed(
+            &mut tracker,
+            r#"{"WorkspaceActiveWindowChanged":{"workspace_id":1,"active_window_id":9}}"#,
+        );
         assert_eq!(horizontal_of(&tracker.drives(&everywhere(BY_COLUMN)), "DP-1"), 1.0);
 
         // Focus leaves for the other monitor. DP-1 has not scrolled, so it must not move.
@@ -838,6 +901,10 @@ mod tests {
         let mut tracker = populated();
         columns_with_gaps(&mut tracker);
         feed(&mut tracker, r#"{"WindowFocusChanged":{"id":8}}"#);
+        feed(
+            &mut tracker,
+            r#"{"WorkspaceActiveWindowChanged":{"workspace_id":1,"active_window_id":8}}"#,
+        );
         assert_eq!(horizontal_of(&tracker.drives(&everywhere(BY_COLUMN)), "DP-1"), 0.5);
 
         // A floating window has no place in the scroll, so nothing has scrolled.
@@ -845,6 +912,10 @@ mod tests {
             &mut tracker,
             r#"{"WindowOpenedOrChanged":{"window":
                 {"id":50,"workspace_id":1,"is_focused":true,"layout":{}}}}"#,
+        );
+        feed(
+            &mut tracker,
+            r#"{"WorkspaceActiveWindowChanged":{"workspace_id":1,"active_window_id":50}}"#,
         );
         assert_eq!(
             horizontal_of(&tracker.drives(&everywhere(BY_COLUMN)), "DP-1"),
@@ -858,6 +929,10 @@ mod tests {
         let mut tracker = populated();
         columns_with_gaps(&mut tracker);
         feed(&mut tracker, r#"{"WindowFocusChanged":{"id":9}}"#);
+        feed(
+            &mut tracker,
+            r#"{"WorkspaceActiveWindowChanged":{"workspace_id":1,"active_window_id":9}}"#,
+        );
         assert_eq!(horizontal_of(&tracker.drives(&everywhere(BY_COLUMN)), "DP-1"), 1.0);
 
         // The last column closes while the focus is elsewhere.
@@ -878,13 +953,153 @@ mod tests {
         );
     }
 
+    /// A workspace nobody has focused still reports its column, from niri's own report.
     #[test]
-    fn a_workspace_nothing_has_been_focused_on_reports_the_centre() {
+    fn a_background_workspace_updates_its_column_without_a_focus_change() {
+        let mut tracker = populated();
+        columns_with_gaps(&mut tracker);
+
+        // Focus moves to a fresh window on eDP-1's workspace -- DP-1 holds no focus at all.
+        feed(
+            &mut tracker,
+            r#"{"WindowOpenedOrChanged":{"window":
+                {"id":99,"workspace_id":2,"is_focused":true,
+                 "layout":{"pos_in_scrolling_layout":[1,1]}}}}"#,
+        );
+
+        // Workspace 1's own active window changes with no focus event touching it.
+        feed(
+            &mut tracker,
+            r#"{"WorkspaceActiveWindowChanged":{"workspace_id":1,"active_window_id":8}}"#,
+        );
+
+        let drives = tracker.drives(&everywhere(BY_COLUMN));
+        assert_eq!(blurred(&drives), vec!["eDP-1"], "focus really did leave DP-1");
+        assert_eq!(
+            horizontal_of(&drives, "DP-1"),
+            0.5,
+            "column 5 of {{1,5,9}}, updated with no focus event"
+        );
+    }
+
+    /// niri's own report wins over a rank-based guess at the nearest surviving column.
+    #[test]
+    fn a_closed_active_window_is_replaced_by_niris_own_report_not_a_rank_guess() {
+        let mut tracker = populated();
+        columns_with_gaps(&mut tracker); // workspace 1's remembered column is 1 (window 4)
+
+        // Real niri's order: WorkspaceActiveWindowChanged before the WindowsChanged that
+        // drops the closed window, since ipc_refresh_workspaces runs before
+        // ipc_refresh_windows.
+        feed(
+            &mut tracker,
+            r#"{"WorkspaceActiveWindowChanged":{"workspace_id":1,"active_window_id":9}}"#,
+        );
+        feed(
+            &mut tracker,
+            r#"{"WindowsChanged":{"windows":[
+                {"id":8,"workspace_id":1,"is_focused":false,
+                 "layout":{"pos_in_scrolling_layout":[5,1]}},
+                {"id":9,"workspace_id":1,"is_focused":false,
+                 "layout":{"pos_in_scrolling_layout":[9,1]}},
+                {"id":3,"workspace_id":2,"is_focused":true,
+                 "layout":{"pos_in_scrolling_layout":[1,1]}}]}}"#,
+        );
+
+        assert_eq!(
+            horizontal_of(&tracker.drives(&everywhere(BY_COLUMN)), "DP-1"),
+            1.0,
+            "niri reported window 9 active; a rank-fallback from the closed column 1 \
+             would instead land on column 5's rank, giving 0.0"
+        );
+    }
+
+    /// A window changes workspace and column in separate events, and the workspace it is
+    /// leaving must not lend its column to the one receiving it.
+    #[test]
+    fn a_window_moving_workspace_never_credits_its_old_column_to_the_new_one() {
+        let mut tracker = populated();
+        columns_with_gaps(&mut tracker);
+        // eDP-1's workspace 2 gets two columns, the first of them active.
+        feed(
+            &mut tracker,
+            r#"{"WindowOpenedOrChanged":{"window":
+                {"id":3,"workspace_id":2,"is_focused":false,
+                 "layout":{"pos_in_scrolling_layout":[1,1]}}}}"#,
+        );
+        feed(
+            &mut tracker,
+            r#"{"WindowOpenedOrChanged":{"window":
+                {"id":20,"workspace_id":2,"is_focused":false,
+                 "layout":{"pos_in_scrolling_layout":[2,1]}}}}"#,
+        );
+        assert_eq!(horizontal_of(&tracker.drives(&everywhere(BY_COLUMN)), "eDP-1"), 0.0);
+
+        // Window 9 leaves column 9 of workspace 1 for the head of workspace 2. niri
+        // refreshes workspaces before windows, so this names 9 while it is still recorded
+        // on workspace 1.
+        feed(
+            &mut tracker,
+            r#"{"WorkspaceActiveWindowChanged":{"workspace_id":2,"active_window_id":9}}"#,
+        );
+        assert_eq!(
+            horizontal_of(&tracker.drives(&everywhere(BY_COLUMN)), "eDP-1"),
+            0.0,
+            "column 9 belongs to the workspace being left, so it says nothing about this one"
+        );
+
+        feed(
+            &mut tracker,
+            r#"{"WindowsChanged":{"windows":[
+                {"id":4,"workspace_id":1,"is_focused":false,
+                 "layout":{"pos_in_scrolling_layout":[1,1]}},
+                {"id":8,"workspace_id":1,"is_focused":false,
+                 "layout":{"pos_in_scrolling_layout":[5,1]}},
+                {"id":9,"workspace_id":2,"is_focused":true,
+                 "layout":{"pos_in_scrolling_layout":[1,1]}},
+                {"id":3,"workspace_id":2,"is_focused":false,
+                 "layout":{"pos_in_scrolling_layout":[2,1]}},
+                {"id":20,"workspace_id":2,"is_focused":false,
+                 "layout":{"pos_in_scrolling_layout":[3,1]}}]}}"#,
+        );
+        assert_eq!(
+            horizontal_of(&tracker.drives(&everywhere(BY_COLUMN)), "eDP-1"),
+            0.0,
+            "the first of three columns, arrived at without ever leaving the head"
+        );
+    }
+
+    /// The initial dump alone seeds a column -- no follow-up event, no focus at all.
+    #[test]
+    fn the_initial_dump_seeds_a_column_on_its_own() {
         let mut tracker = Tracker::default();
         feed(
             &mut tracker,
             r#"{"WorkspacesChanged":{"workspaces":[
-                {"id":1,"idx":1,"output":"DP-1","is_active":true}]}}"#,
+                {"id":1,"idx":1,"output":"DP-1","is_active":true,"active_window_id":9}]}}"#,
+        );
+        feed(
+            &mut tracker,
+            r#"{"WindowsChanged":{"windows":[
+                {"id":8,"workspace_id":1,"is_focused":false,
+                 "layout":{"pos_in_scrolling_layout":[1,1]}},
+                {"id":9,"workspace_id":1,"is_focused":false,
+                 "layout":{"pos_in_scrolling_layout":[2,1]}}]}}"#,
+        );
+        assert_eq!(
+            horizontal_of(&tracker.drives(&everywhere(BY_COLUMN)), "DP-1"),
+            1.0,
+            "resolved from the initial dump's active_window_id alone; nothing was ever focused"
+        );
+    }
+
+    #[test]
+    fn a_workspace_with_no_active_window_reports_the_centre() {
+        let mut tracker = Tracker::default();
+        feed(
+            &mut tracker,
+            r#"{"WorkspacesChanged":{"workspaces":[
+                {"id":1,"idx":1,"output":"DP-1","is_active":true,"active_window_id":null}]}}"#,
         );
         feed(
             &mut tracker,

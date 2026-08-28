@@ -21,6 +21,12 @@ pub enum Event {
     WorkspaceActivated {
         id: u64,
     },
+    /// A workspace's own active window changed. Sent for any workspace, not only the
+    /// focused one, so it is the way a background workspace's scroll position updates.
+    WorkspaceActiveWindowChanged {
+        workspace_id: u64,
+        active_window_id: Option<u64>,
+    },
     WindowsChanged {
         windows: Vec<Window>,
     },
@@ -49,6 +55,10 @@ pub struct Workspace {
     /// Absent when no output is connected.
     pub output: Option<String>,
     pub is_active: bool,
+    /// Id of the window this workspace currently reports as active, independent of
+    /// global keyboard focus.
+    #[serde(deserialize_with = "present_but_nullable")]
+    pub active_window_id: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -94,6 +104,12 @@ mod payload {
     }
 
     #[derive(Deserialize)]
+    pub struct WorkspaceActiveWindow {
+        pub workspace_id: u64,
+        pub active_window_id: Option<u64>,
+    }
+
+    #[derive(Deserialize)]
     pub struct MaybeId {
         pub id: Option<u64>,
     }
@@ -127,6 +143,10 @@ pub fn parse(line: &str) -> Result<Option<Event>, serde_json::Error> {
             Event::WorkspacesChanged { workspaces: read::<payload::Workspaces>(body)?.workspaces }
         }
         "WorkspaceActivated" => Event::WorkspaceActivated { id: read::<payload::Id>(body)?.id },
+        "WorkspaceActiveWindowChanged" => {
+            let payload::WorkspaceActiveWindow { workspace_id, active_window_id } = read(body)?;
+            Event::WorkspaceActiveWindowChanged { workspace_id, active_window_id }
+        }
         "WindowsChanged" => {
             Event::WindowsChanged { windows: read::<payload::Windows>(body)?.windows }
         }
@@ -152,6 +172,21 @@ fn read<T: DeserializeOwned>(body: Value) -> Result<T, serde_json::Error> {
     serde_json::from_value(body)
 }
 
+/// Reads a field niri always writes, whose value may still be null.
+///
+/// serde reads a *missing* `Option` field as `None`, which for `active_window_id` would
+/// make the field disappearing upstream look exactly like a workspace with nothing active:
+/// the column axis would quietly freeze where it stood instead of saying the format moved.
+/// Distinguishing the two is the whole reason [`parse`] treats a modelled event that no
+/// longer reads as an error.
+fn present_but_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::deserialize(deserializer)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,16 +204,18 @@ mod tests {
         assert_eq!(workspaces[0].idx, 1);
         assert_eq!(workspaces[0].output.as_deref(), Some("DP-1"));
         assert!(workspaces[0].is_active);
+        assert_eq!(workspaces[0].active_window_id, Some(4));
     }
 
     #[test]
     fn a_workspace_without_an_output_still_parses() {
         let line = r#"{"WorkspacesChanged":{"workspaces":[
-            {"id":9,"idx":1,"output":null,"is_active":false}]}}"#;
+            {"id":9,"idx":1,"output":null,"is_active":false,"active_window_id":null}]}}"#;
         let Some(Event::WorkspacesChanged { workspaces }) = parse(line).unwrap() else {
             panic!("wrong event")
         };
         assert_eq!(workspaces[0].output, None);
+        assert_eq!(workspaces[0].active_window_id, None, "nothing is active there");
     }
 
     #[test]
@@ -188,6 +225,24 @@ mod tests {
 
         let none = r#"{"WindowFocusChanged":{"id":null}}"#;
         assert!(matches!(parse(none).unwrap(), Some(Event::WindowFocusChanged { id: None })));
+    }
+
+    #[test]
+    fn reads_a_workspace_active_window_change() {
+        let some = r#"{"WorkspaceActiveWindowChanged":{"workspace_id":1,"active_window_id":4}}"#;
+        assert!(matches!(
+            parse(some).unwrap(),
+            Some(Event::WorkspaceActiveWindowChanged {
+                workspace_id: 1,
+                active_window_id: Some(4)
+            })
+        ));
+
+        let none = r#"{"WorkspaceActiveWindowChanged":{"workspace_id":1,"active_window_id":null}}"#;
+        assert!(matches!(
+            parse(none).unwrap(),
+            Some(Event::WorkspaceActiveWindowChanged { workspace_id: 1, active_window_id: None })
+        ));
     }
 
     #[test]
@@ -248,6 +303,13 @@ mod tests {
 
         let reshaped = r#"{"WorkspacesChanged":{"workspaces":[{"id":1}]}}"#;
         assert!(parse(reshaped).is_err(), "a workspace missing its index must not be ignored");
+
+        let dropped = r#"{"WorkspacesChanged":{"workspaces":[
+            {"id":1,"idx":1,"output":"DP-1","is_active":true}]}}"#;
+        assert!(
+            parse(dropped).is_err(),
+            "the field the column axis is seeded from must not go missing quietly"
+        );
     }
 
     #[test]

@@ -486,19 +486,27 @@ thing at more cost, and there is nothing that could ever contradict it.
 niri, so reading the column off the focused window answers for one monitor and leaves every
 other one reporting nothing, which the backend's `progress` reads as centred.
 
-The fix is that the column is remembered per workspace, in `Tracker::workspace_column`,
-updated whenever the focus lands somewhere with a place in the scroll. An output then
-reports the position of its own active workspace regardless of where the focus is. Two
-consequences fall out of the same choice:
+The fix is that the column is remembered per workspace, in `Tracker::workspace_column`, kept
+in step with niri's own `WorkspaceActiveWindowChanged` rather than inferred from focus. Every
+workspace reports this on its own, independent of which one holds the keyboard, so an output
+reports the position of its own active workspace whether or not the focus has ever passed
+through it -- and a background workspace's active window closing, with niri picking a
+neighbour, moves it too, not only a focus change. Two consequences survive that source
+unchanged:
 
-- Focusing a floating or fullscreen window holds the position instead of recentring the
-  wallpaper. Such a window has no column, so there is nothing to record, and the
-  workspace has not scrolled just because something is drawn over it.
+- A workspace whose active window is floating or fullscreen holds its position instead of
+  recentring the wallpaper. Such a window has no column, so there is nothing to record, and
+  the workspace has not scrolled just because something is drawn over it.
 - A remembered column that has since closed resolves to the nearest surviving one rather
   than to the centre, so closing a window never makes the wallpaper jump.
 
-A workspace nothing has ever been focused on has no position to report, and centred is the
-only neutral answer there.
+What the two sources cost is that a column is only recorded while the window still sits on
+the workspace claiming it. The workspace comes from niri and the column from what the daemon
+last heard, and a window moving between workspaces changes those in separate events, so an
+unchecked pairing lets whichever arrives first hand one workspace the other's column.
+
+A workspace niri has not yet reported an active window for has no position to report, and
+centred is the only neutral answer there.
 
 Wallpaper transitions are carried the same way, from the two-slot `WallpaperSlot` in
 `domain` through to `u_mix` in the composite shader. This is on by default, so the second
