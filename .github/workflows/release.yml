@@ -35,7 +35,7 @@ jobs:
         run: cargo build --release --locked --workspace
 
       - name: Test
-        run: cargo test --release --locked --workspace
+        run: cargo test --locked --workspace
 
       - name: Package
         run: |

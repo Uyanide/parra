@@ -84,7 +84,7 @@ cargo build --release --locked
 Optionally, run the tests with:
 
 ```bash
-cargo test --release --locked --workspace
+cargo test --locked --workspace
 ```
 
 ### Install
