@@ -443,7 +443,7 @@ curve could only ever match one of the two. Which niri animation each pairs with
 [usage.md](usage.md#match-animations-1).
 
 **Hyprland derives a position from its live workspace topology.** Its IPC reports every
-workspace's numeric id and monitor ownership. The backend groups ordinary positive ids by
+workspace's address and monitor ownership. The backend groups the numbered workspaces by
 monitor, sorts each group numerically, and normalizes the active workspace's exact index to
 a `Stop`. The conversion remains behind the backend boundary: `domain` never learns the
 word workspace, and nothing downstream can tell the two compositors apart.
@@ -466,13 +466,24 @@ monitor's wallpaper alone. It is a smaller price than the setting it replaced: a
 span was the only thing here a user had to keep in step with the compositor by hand, and it
 could not describe a workspace renumbered underneath it.
 
-Named and special workspaces have negative ids and do not travel. An active negative id, an
-unknown active id, and a topology with fewer than two usable workspaces all give
-`Stop::CENTRED`. A special workspace reaches none of that: drawn over the workspace a monitor
+Named and special workspaces have no number and do not travel. An active workspace without
+one, an unknown active workspace, and a topology with fewer than two usable workspaces all
+give `Stop::CENTRED`. A special workspace reaches none of that: drawn over the workspace a monitor
 is showing rather than in place of it, it never becomes what that monitor reports as active,
 and the deliberate half of the same behaviour is the unparsed `activespecial` above.
 
-Records are kept for the ids that do not travel, so rename, movement, window identity, and
+Every workspace is keyed by its address, which since Hyprland 0.57 is the one identity both
+sockets use: the number of an ordinary workspace, the name a named one was opened with, and
+`special:` and a name for a special one. Renaming changes only a display name, which nothing
+here reads, so a window event joins on what it carries with no lookup in between. The number
+is read off the address, because only `j/` answers carry an `id` and only for ordinary
+workspaces, and the compositor refuses a name made of digits.
+
+The workspace events are read in their original spelling for the same reason. Each carries
+the address alone, while the `v2` spelling follows it with that display name, and with two
+free-text fields side by side no comma can be told apart from the separator.
+
+Records are kept for the workspaces that do not travel, so movement, window identity, and
 destruction events still join on them.
 
 **A channel a compositor cannot drive is left undriven, not faked.** Hyprland reports no

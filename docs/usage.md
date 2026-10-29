@@ -83,7 +83,7 @@ parra set /path/to/preferred/wallpaper.ext
 </details>
 
 <details>
-<summary>For Hyprland</summary>
+<summary>For Hyprland (≥0.57)</summary>
 
 ```bash
 cat > "${XDG_CONFIG_HOME:-${HOME}/.config}/hypr/parra.lua" << 'EOF_PARRA_LUA'
@@ -249,6 +249,11 @@ spawn-at-startup "parra" "daemon"
 > [this section](#autostart-via-systemd-unit) below.
 
 ### Hyprland
+
+> [!IMPORTANT]
+>
+> Hyprland often ship breaking changes in major version updates. Since v0.2.1, parra
+> requires a minimum Hyprland version of 0.57.
 
 All of this goes in `$XDG_CONFIG_HOME/hypr/hyprland.lua`, or `~/.config/hypr/hyprland.lua`
 if that variable is unset, or any file it requires.

@@ -62,7 +62,7 @@ horizontal = "column"
 
 > [!NOTE]
 >
-> Only niri and Hyprland are supported with compositor-driven effects so far.
+> Only niri and Hyprland (≥0.57) are supported with compositor-driven effects so far.
 > Support for more compositors may arrive in the future.
 
 ## Documentations

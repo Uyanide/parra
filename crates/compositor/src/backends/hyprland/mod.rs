@@ -290,8 +290,8 @@ impl Backend {
     /// Asks what is true right now, which is what this socket is used for at cold start.
     fn seed(&self, tracker: &mut Tracker) -> Result<(), BackendError> {
         // Monitors carry which one is focused and what each is showing; workspaces carry
-        // the names those ids stand for, which is what places them in the travel; the
-        // active window says whether anything at all holds the focus.
+        // the monitor owning each, which is what places them in the travel; the active
+        // window says whether anything at all holds the focus.
         let monitors = self.ask("j/monitors", "the monitors")?;
         let workspaces = self.ask("j/workspaces", "the workspaces")?;
         let window = self.ask("j/activewindow", "the focused window")?;
@@ -370,14 +370,14 @@ mod tests {
     #[test]
     fn only_incomplete_topology_events_require_resync() {
         for event in [
-            Event::WorkspaceCreated { id: 1, name: "1".into() },
-            Event::WorkspaceMoved { id: 1, name: "1".into(), monitor: "DP-1".into() },
+            Event::WorkspaceCreated { workspace: "1".into() },
+            Event::WorkspaceMoved { workspace: "1".into(), monitor: "DP-1".into() },
             Event::WorkspaceIdChanged { from: 1, to: 2 },
             Event::MonitorAdded { name: "DP-1".into() },
             Event::MonitorRemoved { name: "DP-1".into() },
         ] {
             assert!(unanswered(&event).is_some());
         }
-        assert!(unanswered(&Event::WorkspaceActive { id: 1, name: "1".into() }).is_none());
+        assert!(unanswered(&Event::WorkspaceActive { workspace: "1".into() }).is_none());
     }
 }
